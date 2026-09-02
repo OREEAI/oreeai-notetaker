@@ -38,6 +38,7 @@ api/  ->  services/  ->  repositories/  ->  models (SQLAlchemy)
 - **`services/`**: All business logic, validation rules, cache orchestration, cross-repo coordination. Returns Pydantic schemas (`schemas/`), receives repositories via constructor. This is where feature behavior lives.
 - **`repositories/`**: Data access only. Generic `BaseRepository` provides get/list/create/update/delete; subclasses add entity-specific queries. Returns ORM models. Never contains business rules.
 - **`models/`**: SQLAlchemy ORM models. Mixins in `db/base.py` (`UUIDPrimaryKeyMixin`, `TimestampMixin`) — reuse them for new tables.
+- **`enums/`**: Shared `StrEnum` types (e.g. `MeetingPlatform`, `MeetingStatus`) referenced across models, schemas, services, and integrations. Never define an enum inside `models/` if anything outside the model layer needs it — put it here, one file per domain (`enums/meeting.py`), re-exported in `enums/__init__.py`.
 - **`schemas/`**: Pydantic DTOs. `*Create`, `*Update` (all-optional patch semantics via `model_dump(exclude_unset=True)`), `*Read` (with `from_attributes`).
 - **`core/`**: Cross-cutting: `config.py` (pydantic-settings; add new env vars here), `cache.py` (`CacheService`, Redis-backed, degrades gracefully to no-op when Redis is down), `exceptions.py` (`AppError` subclasses are mapped to HTTP responses automatically in `main.py`).
 - **`integrations/`**: External platform clients (Google Meet, Zoom). Implement the `MeetingPlatformClient` protocol in `integrations/base.py`. Adapters only — no business logic here.

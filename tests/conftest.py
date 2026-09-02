@@ -2,6 +2,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
+from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -23,8 +24,8 @@ async def db_session() -> AsyncIterator[AsyncSession]:
 
 
 @pytest.fixture
-async def client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
-    app = create_app()
+async def app(db_session: AsyncSession) -> AsyncIterator[FastAPI]:
+    application = create_app()
 
     async def override_get_db() -> AsyncIterator[AsyncSession]:
         try:
@@ -34,7 +35,13 @@ async def client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
             await db_session.rollback()
             raise
 
-    app.dependency_overrides[get_db] = override_get_db
+    application.dependency_overrides[get_db] = override_get_db
+    yield application
+    application.dependency_overrides.clear()
+
+
+@pytest.fixture
+async def client(app: FastAPI) -> AsyncIterator[AsyncClient]:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac

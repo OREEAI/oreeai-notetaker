@@ -1,25 +1,10 @@
-import enum
 from datetime import datetime
 
 from sqlalchemy import DateTime, Enum, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from oreeai_nt.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
-
-
-class MeetingPlatform(enum.StrEnum):
-    google_meet = "google_meet"
-    zoom = "zoom"
-    in_person = "in_person"
-    other = "other"
-
-
-class MeetingStatus(enum.StrEnum):
-    scheduled = "scheduled"
-    in_progress = "in_progress"
-    completed = "completed"
-    cancelled = "cancelled"
-    failed = "failed"
+from oreeai_nt.enums import MeetingPlatform, MeetingStatus
 
 
 class Meeting(Base, UUIDPrimaryKeyMixin, TimestampMixin):

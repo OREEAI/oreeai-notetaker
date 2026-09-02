@@ -3,9 +3,10 @@ from datetime import datetime
 
 from oreeai_nt.core.cache import CacheService
 from oreeai_nt.core.exceptions import ConflictError, NotFoundError
-from oreeai_nt.models.meeting import Meeting, MeetingStatus
+from oreeai_nt.enums import MeetingStatus
+from oreeai_nt.models.meeting import Meeting
 from oreeai_nt.repositories.meeting import MeetingRepository
-from oreeai_nt.schemas.meeting import MeetingCreate, MeetingRead, MeetingUpdate
+from oreeai_nt.schemas.meeting import MeetingCreate, MeetingListItem, MeetingRead, MeetingUpdate
 
 
 class MeetingService:
@@ -29,9 +30,9 @@ class MeetingService:
         await self._cache.set_json(cache_key, read.model_dump(mode="json"))
         return read
 
-    async def list_meetings(self, *, offset: int = 0, limit: int = 100) -> list[MeetingRead]:
+    async def list_meetings(self, *, offset: int = 0, limit: int = 100) -> list[MeetingListItem]:
         meetings = await self._repository.list(offset=offset, limit=limit)
-        return [MeetingRead.model_validate(m) for m in meetings]
+        return [MeetingListItem.model_validate(m) for m in meetings]
 
     async def update_meeting(self, meeting_id: uuid.UUID, data: MeetingUpdate) -> MeetingRead:
         meeting = await self._require_meeting(meeting_id)

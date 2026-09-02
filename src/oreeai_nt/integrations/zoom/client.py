@@ -1,6 +1,6 @@
 from typing import Any
 
-from oreeai_nt.models.meeting import MeetingPlatform
+from oreeai_nt.enums import MeetingPlatform
 
 
 class ZoomClient:

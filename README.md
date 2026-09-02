@@ -53,6 +53,7 @@ src/oreeai_nt/
 ├── repositories/   # data access
 ├── models/         # SQLAlchemy models
 ├── schemas/        # Pydantic DTOs
+├── enums/          # shared StrEnum types (per domain)
 ├── core/           # config, cache, exceptions, logging
 ├── db/             # engine, session, base/mixins
 ├── integrations/   # Google Meet / Zoom clients

@@ -29,8 +29,10 @@ async def test_list_meetings(client) -> None:
 
     response = await client.get("/api/v1/meetings")
     assert response.status_code == 200
-    titles = [m["title"] for m in response.json()]
-    assert titles == ["Retro", "Weekly sync"]
+    meetings = response.json()
+    assert len(meetings) == 2
+    assert "transcript" not in meetings[0]
+    assert sorted(m["title"] for m in meetings) == ["Retro", "Weekly sync"]
 
 
 async def test_update_meeting(client) -> None:
@@ -76,3 +78,25 @@ async def test_delete_meeting(client) -> None:
 
     get_resp = await client.get(f"/api/v1/meetings/{meeting_id}")
     assert get_resp.status_code == 404
+
+
+async def test_naive_datetimes_normalized_to_utc(client) -> None:
+    response = await client.post(
+        "/api/v1/meetings",
+        json={"title": "Naive times", "scheduled_at": "2026-09-10T10:00:00"},
+    )
+    assert response.status_code == 201
+    assert response.json()["scheduled_at"] == "2026-09-10T10:00:00Z"
+
+
+async def test_mixed_naive_and_aware_datetimes_accepted(client) -> None:
+    meeting_id = (await client.post("/api/v1/meetings", json=MEETING_PAYLOAD)).json()["id"]
+
+    response = await client.patch(
+        f"/api/v1/meetings/{meeting_id}",
+        json={"started_at": "2026-09-10T10:00:00", "ended_at": "2026-09-10T11:00:00Z"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["started_at"] == "2026-09-10T10:00:00Z"
+    assert body["ended_at"] == "2026-09-10T11:00:00Z"

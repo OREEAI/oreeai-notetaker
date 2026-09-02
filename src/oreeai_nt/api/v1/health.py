@@ -16,6 +16,7 @@ async def health(session: SessionDep, cache: CacheDep) -> JSONResponse:
     try:
         await session.execute(text("SELECT 1"))
     except SQLAlchemyError:
+        await session.rollback()
         database = "down"
 
     cache_status = "up" if await cache.ping() else "down"

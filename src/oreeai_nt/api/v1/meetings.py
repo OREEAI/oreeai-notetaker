@@ -3,7 +3,7 @@ import uuid
 from fastapi import APIRouter, Query
 
 from oreeai_nt.api.deps import MeetingServiceDep
-from oreeai_nt.schemas.meeting import MeetingCreate, MeetingRead, MeetingUpdate
+from oreeai_nt.schemas.meeting import MeetingCreate, MeetingListItem, MeetingRead, MeetingUpdate
 
 router = APIRouter()
 
@@ -13,12 +13,12 @@ async def create_meeting(data: MeetingCreate, service: MeetingServiceDep) -> Mee
     return await service.create_meeting(data)
 
 
-@router.get("", response_model=list[MeetingRead])
+@router.get("", response_model=list[MeetingListItem])
 async def list_meetings(
     service: MeetingServiceDep,
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=200),
-) -> list[MeetingRead]:
+) -> list[MeetingListItem]:
     return await service.list_meetings(offset=offset, limit=limit)
 
 
