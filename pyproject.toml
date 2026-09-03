@@ -1,0 +1,57 @@
+[project]
+name = "oreeai-nt"
+version = "0.1.0"
+description = "AI note taker for Google Meet and Zoom meetings"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30.0",
+    "alembic>=1.14.0",
+    "pydantic-settings>=2.6.0",
+    "redis>=5.2.0",
+    "httpx>=0.28.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
+    "aiosqlite>=0.20.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.0,<1.0.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "oreeai_nt"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "ASYNC"]
+ignore = ["B008"]  # FastAPI DI uses function calls in defaults
+
+[tool.mypy]
+python_version = "3.13"
+files = ["src"]
+mypy_path = "src"
+strict = true
+plugins = ["pydantic.mypy"]
+disallow_untyped_decorators = false
+
+[tool.coverage.run]
+source = ["src/oreeai_nt"]

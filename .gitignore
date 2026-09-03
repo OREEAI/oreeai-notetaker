@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+
+# Environments & secrets
+.env
+.env.local
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Project planning artifacts (plans live here, never in git)
+plans/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
