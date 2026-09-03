@@ -71,7 +71,7 @@ Use the existing Meetings feature (`models/meeting.py` → `api/v1/meetings.py`)
 ## Git workflow
 
 - **Feature branching with squash & merge**: branch off `main` as `feat/<name>`, `fix/<name>`, or `chore/<name>`; PRs are squash-merged to `main`, so keep branch history noisy but write a clean squash commit message
-- CI (`.github/workflows/ci.yml`) must pass: ruff, mypy, pytest
+- CI must pass before merge: **Lint** (`.github/workflows/lint.yml` — ruff, mypy) and **CI** (`.github/workflows/ci.yml` — pytest)
 
 ## Plans folder
 

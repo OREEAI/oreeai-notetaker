@@ -1,4 +1,4 @@
-name: CI
+name: Lint
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  test:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,5 +20,11 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
-      - name: Test
-        run: uv run pytest
+      - name: Ruff check
+        run: uv run ruff check .
+
+      - name: Ruff format
+        run: uv run ruff format --check .
+
+      - name: Mypy
+        run: uv run mypy
