@@ -27,24 +27,24 @@ Role = Literal["button", "textbox"]
 RoleQuery = tuple[Role, re.Pattern[str]]
 
 _JOIN: tuple[RoleQuery, ...] = (
-    ("button", re.compile("Join now", re.IGNORECASE)),
-    ("button", re.compile("Ask to join", re.IGNORECASE)),
+    ("button", re.compile("Join now.*", re.IGNORECASE)),
+    ("button", re.compile("Ask to join.*", re.IGNORECASE)),
 )
 _MICROPHONE: tuple[RoleQuery, ...] = (
-    ("button", re.compile(r"(turn on|turn off) microphone", re.IGNORECASE)),
+    ("button", re.compile(r"(turn on|turn off) microphone.*", re.IGNORECASE)),
 )
 _CAMERA: tuple[RoleQuery, ...] = (
-    ("button", re.compile(r"(turn on|turn off) camera", re.IGNORECASE)),
+    ("button", re.compile(r"(turn on|turn off) camera.*", re.IGNORECASE)),
 )
-_LEAVE_CALL: tuple[RoleQuery, ...] = (("button", re.compile("Leave call", re.IGNORECASE)),)
-_NAME_INPUT: tuple[RoleQuery, ...] = (("textbox", re.compile(r"your name", re.IGNORECASE)),)
-_KNOCKING: re.Pattern[str] = re.compile("Asking to be let in", re.IGNORECASE)
+_LEAVE_CALL: tuple[RoleQuery, ...] = (("button", re.compile("Leave call.*", re.IGNORECASE)),)
+_NAME_INPUT: tuple[RoleQuery, ...] = (("textbox", re.compile(r"your name.*", re.IGNORECASE)),)
+_KNOCKING: re.Pattern[str] = re.compile("Asking to be let in.*", re.IGNORECASE)
 _CALL_ENDED: re.Pattern[str] = re.compile(
-    r"meeting has ended|you'?ve left the meeting|you left the meeting",
+    r"meeting has ended.*|you'?ve left the meeting.*|you left the meeting.*",
     re.IGNORECASE,
 )
 _REMOVED: re.Pattern[str] = re.compile(
-    r"removed from the meeting|removed you",
+    r"removed from the meeting.*|removed you.*",
     re.IGNORECASE,
 )
 

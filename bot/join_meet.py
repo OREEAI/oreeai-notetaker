@@ -6,12 +6,15 @@ PR 2; `bot/states.py` will absorb the state detection this file
 currently inlines. Exit codes already follow the Shared contracts table:
 0 clean end, 2 never admitted, 5 unexpected bot error.
 
-Env vars:
+    Env vars:
     MEETING_URL   (required) the https://meet.google.com/... link to join
-    BOT_NAME      display name; spike-only — PR 3 hard-codes "Oree Notetaker"
+    BOT_NAME      display name; spike-only - PR 3 hard-codes "Oree Notetaker"
     CONSENT_ACK   logged pass-through only; enforcement lands in PR 3
     CALL_ID       WAV file name, default "spike" (runner passes the real id)
     LOG_LEVEL     stdlib level name, default INFO
+    DEBUG_DIR     where to write /tmp/oreeai-debug-<ts>.png on state stall;
+                  default /tmp (which the spike sets to /debug via Makefile
+                  so the screenshot survives the --rm container)
 """
 
 from __future__ import annotations
@@ -44,7 +47,8 @@ ADMIT_TIMEOUT_S = 600.0
 ENDED_CONFIRMATION_POLLS = 3
 MEDIA_MUTE_TIMEOUT_MS = 5000
 GOTO_TIMEOUT_MS = 60000
-DEBUG_SCREENSHOT_PREFIX = "/tmp/oreeai-debug"
+DEBUG_SCREENSHOT_NAME = "oreeai-debug"
+_TEXT_SNIPPET_CHARS = 300
 
 _CHROMIUM_ARGS: tuple[str, ...] = (
     "--autoplay-policy=no-user-gesture-required",
@@ -75,12 +79,26 @@ class _Stop:
 
 
 def _debug_screenshot(page: Page, reason: str) -> None:
-    path = f"{DEBUG_SCREENSHOT_PREFIX}-{time.strftime('%Y%m%d-%H%M%S')}.png"
+    debug_dir = os.environ.get("DEBUG_DIR", "/tmp")
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    path = f"{debug_dir.rstrip('/')}/{DEBUG_SCREENSHOT_NAME}-{ts}.png"
     try:
         page.screenshot(path=path)
-        logger.warning("state detection stalled (%s); saved debug screenshot to %s", reason, path)
     except Exception:
         logger.exception("failed to save debug screenshot (%s)", reason)
+        return
+    try:
+        body_text = page.evaluate("() => document.body && document.body.innerText || ''") or ""
+    except Exception:
+        body_text = ""
+    snippet = " ".join(body_text.split())[:_TEXT_SNIPPET_CHARS]
+    logger.warning(
+        "state detection stalled (%s); url=%s; saved %s; text=%r",
+        reason,
+        page.url,
+        path,
+        snippet,
+    )
 
 
 def _mute_media(
@@ -166,7 +184,7 @@ def _join_and_record(page: Page, meeting_url: str, bot_name: str, call_id: str, 
 
 def _run(meeting_url: str, bot_name: str, call_id: str, stop: _Stop) -> int:
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True, args=list(_CHROMIUM_ARGS))
+        browser = playwright.chromium.launch(headless=False, args=list(_CHROMIUM_ARGS))
         context: BrowserContext = browser.new_context(
             locale="en-US",
             permissions=["microphone", "camera"],

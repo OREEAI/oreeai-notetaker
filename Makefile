@@ -47,10 +47,11 @@ bot-build:
 	docker build -t oreeai-bot:local -f bot/Dockerfile .
 
 bot-run:
-	mkdir -p bot/audio && chmod 777 bot/audio
+	mkdir -p bot/audio bot/debug && chmod 777 bot/audio bot/debug
 	docker run --rm --init --shm-size=1g --name oreeai-bot-spike \
-		-e MEETING_URL -e BOT_NAME -e CONSENT_ACK -e CALL_ID -e LOG_LEVEL \
+		-e MEETING_URL -e BOT_NAME -e CONSENT_ACK -e CALL_ID -e LOG_LEVEL -e DEBUG_DIR=/debug \
 		-v $(CURDIR)/bot/audio:/audio \
+		-v $(CURDIR)/bot/debug:/debug \
 		oreeai-bot:local
 
 clean:
