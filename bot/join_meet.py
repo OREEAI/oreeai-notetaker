@@ -169,7 +169,7 @@ def _run(meeting_url: str, bot_name: str, call_id: str, stop: _Stop) -> int:
         browser = playwright.chromium.launch(headless=True, args=list(_CHROMIUM_ARGS))
         context: BrowserContext = browser.new_context(
             locale="en-US",
-            permissions=["audioCapture", "videoCapture"],
+            permissions=["microphone", "camera"],
             viewport={"width": 1280, "height": 720},
         )
         try:

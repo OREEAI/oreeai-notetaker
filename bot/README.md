@@ -58,8 +58,9 @@ ffprobe bot/audio/*.wav
 3. **`--lang=en-US`** + context `locale="en-US"` + `LANG=en_US.UTF-8` (image
    generates the locale) — Meet UI selectors break on localized strings.
 4. **`--use-fake-ui-for-media-stream`** + context permissions
-   `audioCapture`/`videoCapture` — auto-grants media capture; the bot joins
-   with mic muted and camera off (toggles clicked before "ask to join").
+   `microphone`/`camera` (Playwright's API names; they map to Chromium's
+   `audioCapture`/`videoCapture`) — auto-grants media capture; the bot
+   joins with mic muted and camera off (toggles clicked before "ask to join").
 5. **`pulseaudio --exit-idle-time=-1`** — without it the daemon quits after
    30 s of silence (which there will be, in waiting rooms) and capture dies
    mid-call. Plus `module-null-sink sink_name=virtual_speaker`: the
