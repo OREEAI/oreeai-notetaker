@@ -22,6 +22,14 @@ troubleshooting screenshots. Both are gitignored local dirs. Stop the bot
 with `Ctrl-C` or `docker stop oreeai-bot-spike` — SIGTERM is handled
 gracefully, the recording is finalized before exit.
 
+## Launch probe
+
+`make bot-probe` launches the browser inside the container exactly as the bot
+does (same channel and flags, imported verbatim from `bot/join_meet.py` so the
+probe cannot drift from what the bot ships) and checks it comes up headful
+under Xvfb with `navigator.webdriver` false. Re-run it after any Dockerfile
+or launch-config change, before spending a manual gate run on it.
+
 ## Env vars
 
 | Var | Required | Default | Notes |
@@ -82,6 +90,15 @@ serving a verify/captcha/error page to an automated visitor.
    window with the same link works fine). This flag suppresses the
    automation fingerprint (`navigator.webdriver` reads `false` again).
 
+7. **`channel="chrome"`** — Playwright's bundled Chromium build is detected
+   by Meet's server-side anti-bot check: the bot cleared the green room and
+   clicked "Join now", and Meet served its "You can't join this video call"
+   wall at the moment of joining (an incognito window with the same link
+   joined directly, ruling out meeting policy and network). The image
+   installs branded Google Chrome (`playwright install chrome --with-deps`;
+   ~300–500 MB larger) and `join_meet.py` launches it via
+   `channel="chrome"`; the bundled Chromium install stays as an A/B baseline.
+
 Also note: `--no-sandbox` is required because the container runs Chromium
 as a non-root user without `SYS_ADMIN`.
 
@@ -109,7 +126,7 @@ never logged with identifiers.
 |---|---|---|
 | 0 | Clean end (call ended or graceful SIGTERM/stop) | |
 | 2 | Never admitted (waiting-room timeout, 600 s in the spike) | |
-| 5 | Unexpected bot error (Playwright crash, exception, capture failure, or the meeting blocks anonymous guests — see Gate criteria) | |
+| 5 | Unexpected bot error (Playwright crash, exception, capture failure, the meeting blocks anonymous guests, or Meet blocks the join attempt — see Gate criteria) | |
 
 The full contract table (3 removed, 4 timeouts, 6 consent refused, 7 silent
 recording) is wired in PR 2.

@@ -21,14 +21,15 @@ ENV LANG=en_US.UTF-8 \
 
 COPY bot/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt \
-    && playwright install --with-deps chromium
+    && playwright install --with-deps chromium \
+    && playwright install chrome --with-deps
 
 RUN useradd --create-home --uid 1000 bot \
     && mkdir -p /run/pulse /audio \
     && chown -R bot:bot /run/pulse /audio
 
 WORKDIR /app
-COPY bot/__init__.py bot/join_meet.py bot/selectors.py bot/record_audio.py /app/bot/
+COPY bot/__init__.py bot/join_meet.py bot/selectors.py bot/record_audio.py bot/probe_browser.py /app/bot/
 COPY bot/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh \
     && chown -R bot:bot /app

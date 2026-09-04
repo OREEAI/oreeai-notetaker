@@ -1,6 +1,6 @@
 UV ?= uv
 
-.PHONY: setup dev test lint format typecheck makemigrations migrate downgrade docker-up docker-down docker-logs docker-rebuild bot-build bot-run clean
+.PHONY: setup dev test lint format typecheck makemigrations migrate downgrade docker-up docker-down docker-logs docker-rebuild bot-build bot-run bot-probe clean
 
 setup:
 	$(UV) sync
@@ -53,6 +53,9 @@ bot-run:
 		-v $(CURDIR)/bot/audio:/audio \
 		-v $(CURDIR)/bot/debug:/debug \
 		oreeai-bot:local
+
+bot-probe:
+	docker run --rm --shm-size=1g --entrypoint bash oreeai-bot:local -c 'Xvfb :99 -screen 0 1280x720x24 -nolisten tcp & sleep 1; DISPLAY=:99 python -m bot.probe_browser'
 
 clean:
 	rm -rf .venv .pytest_cache .mypy_cache .ruff_cache dist build *.egg-info

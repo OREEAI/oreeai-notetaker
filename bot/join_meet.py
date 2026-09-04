@@ -6,6 +6,9 @@ PR 2; `bot/states.py` will absorb the state detection this file
 currently inlines. Exit codes already follow the Shared contracts table:
 0 clean end, 2 never admitted, 5 unexpected bot error.
 
+Launches branded Google Chrome (channel="chrome"): Meet's server-side
+anti-bot check detects Playwright's bundled Chromium build at join time.
+
     Env vars:
     MEETING_URL   (required) the https://meet.google.com/... link to join
     BOT_NAME      display name; spike-only - PR 3 hard-codes "Oree Notetaker"
@@ -52,6 +55,11 @@ _TEXT_SNIPPET_CHARS = 300
 JOIN_BLOCK_CHECK_TIMEOUT_MS = 4000
 FIRST_ADMISSION_EVIDENCE_S = 5.0
 ADMISSION_EVIDENCE_INTERVAL_S = 30.0
+
+# Branded Google Chrome: Meet's server-side anti-bot check detects Playwright's
+# bundled Chromium build at join time. `bot/probe_browser.py` imports this
+# constant and `_CHROMIUM_ARGS` verbatim so the probe cannot drift.
+BROWSER_CHANNEL: str | None = "chrome"
 
 _CHROMIUM_ARGS: tuple[str, ...] = (
     "--autoplay-policy=no-user-gesture-required",
@@ -163,6 +171,10 @@ def _join_and_record(page: Page, meeting_url: str, bot_name: str, call_id: str, 
             logger.info("admitted to the call")
             admitted = True
             break
+        if selectors.join_blocked_indicator(page, timeout_ms=0) is not None:
+            _debug_screenshot(page, "meet blocked the join attempt")
+            logger.error("meet blocked the join attempt (anti-bot wall)")
+            return EXIT_BOT_ERROR
         if now >= next_evidence:
             _debug_screenshot(page, "waiting for admission (periodic evidence)")
             next_evidence = now + ADMISSION_EVIDENCE_INTERVAL_S
@@ -200,7 +212,11 @@ def _join_and_record(page: Page, meeting_url: str, bot_name: str, call_id: str, 
 
 def _run(meeting_url: str, bot_name: str, call_id: str, stop: _Stop) -> int:
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=False, args=list(_CHROMIUM_ARGS))
+        browser = playwright.chromium.launch(
+            channel=BROWSER_CHANNEL,
+            headless=False,
+            args=list(_CHROMIUM_ARGS),
+        )
         context: BrowserContext = browser.new_context(
             locale="en-US",
             permissions=["microphone", "camera"],
