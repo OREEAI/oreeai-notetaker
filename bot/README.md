@@ -17,19 +17,21 @@ make bot-run MEETING_URL=https://meet.google.com/xxx-xxxx-xxx BOT_NAME=Spike CON
 ```
 
 `make bot-run` creates and mounts `bot/audio` as `/audio` inside the
-container (the WAV lands there). Stop the bot with `Ctrl-C` or
-`docker stop oreeai-bot-spike` — SIGTERM is handled gracefully, the
-recording is finalized before exit.
+container (the WAV lands there), plus `bot/debug` as `/debug` for
+troubleshooting screenshots. Both are gitignored local dirs. Stop the bot
+with `Ctrl-C` or `docker stop oreeai-bot-spike` — SIGTERM is handled
+gracefully, the recording is finalized before exit.
 
 ## Env vars
 
 | Var | Required | Default | Notes |
 |---|---|---|---|
 | `MEETING_URL` | yes | — | `https://meet.google.com/xxx-xxxx-xxx` |
-| `BOT_NAME` | no | `Oree Spike` | **Spike only.** PR 3 hard-codes the name to `Oree Notetaker`. |
+| `BOT_NAME` | no | `Oree Spike` | **Spike only.** PR 3 hard-codes the name to `Oree Notetaker`. The bot types it into Meet's "Your name" field before joining. |
 | `CONSENT_ACK` | no | — | Logged pass-through in the spike; refusing to start without it lands in PR 3. |
 | `CALL_ID` | no | `spike` | Names the WAV: `/audio/<CALL_ID>.wav`. The runner later passes the real call id. |
 | `LOG_LEVEL` | no | `INFO` | stdlib level name |
+| `DEBUG_DIR` | no | `/tmp` | Where stall screenshots land. The Makefile sets it to `/debug` (mounted as `bot/debug`) so screenshots survive the `--rm` container. |
 
 The container runs as uid `1000`. If your host uid differs, make the audio
 mount writable: `chmod 777 bot/audio` (the Makefile target does this for you).
@@ -50,8 +52,8 @@ ffprobe bot/audio/*.wav
 
 ## Trap flags (why these exist — do not remove)
 
-1. **`--autoplay-policy=no-user-gesture-required`** — headless Chromium
-   blocks autoplay without a user gesture; without this flag you get a
+1. **`--autoplay-policy=no-user-gesture-required`** — Chromium blocks
+   autoplay without a user gesture; without this flag you get a
    silent recording that "works" (a vacuous pass).
 2. **`--disable-dev-shm-usage`** (+ `--shm-size=1g` on docker run) —
    Chromium crashes in Docker on the default 64 MB `/dev/shm`.
@@ -68,6 +70,11 @@ ffprobe bot/audio/*.wav
    and `parec` records its monitor. Setting the default sink ensures
    Chromium's audio goes there.
 
+Chromium runs **headful** (`headless=False`) under the entrypoint's Xvfb —
+the standard meet-bot setup. Headful Chromium doesn't advertise
+`HeadlessChrome` in its user agent, which is the most common cause of Meet
+serving a verify/captcha/error page to an automated visitor.
+
 Also note: `--no-sandbox` is required because the container runs Chromium
 as a non-root user without `SYS_ADMIN`.
 
@@ -76,7 +83,8 @@ as a non-root user without `SYS_ADMIN`.
 Every Meet DOM selector lives in `bot/selectors.py` (aria-label / role
 based, `en-US` forced). A Meet UI change must be a one-file fix. When state
 detection stalls, the bot saves a debug screenshot to
-`/tmp/oreeai-debug-<ts>.png` and logs a warning.
+`$DEBUG_DIR/oreeai-debug-<ts>.png` (`bot/debug/` in spike runs) and logs a
+warning with the page URL and a snippet of visible page text.
 
 `bot/selectors.py` is imported only as part of the `bot` package
 (`python -m bot.join_meet`): a flat script import from inside `bot/` would
@@ -94,7 +102,7 @@ never logged with identifiers.
 |---|---|---|
 | 0 | Clean end (call ended or graceful SIGTERM/stop) | |
 | 2 | Never admitted (waiting-room timeout, 600 s in the spike) | |
-| 5 | Unexpected bot error (Playwright crash, exception, capture failure) | |
+| 5 | Unexpected bot error (Playwright crash, exception, capture failure, or the meeting blocks anonymous guests — see Gate criteria) | |
 
 The full contract table (3 removed, 4 timeouts, 6 consent refused, 7 silent
 recording) is wired in PR 2.
@@ -104,7 +112,11 @@ recording) is wired in PR 2.
 A container started with a Meet URL produces a WAV that contains your
 voice, recorded off a real Meet call you joined from a second device:
 
-1. Host a call from device A, grab the guest link.
+1. Host a call from device A, grab the guest link. In the meeting's host
+   controls, make sure **Quick access is ON** — otherwise the bot hits
+   Meet's "You can't join this video call" block screen. Sanity check:
+   open the link in an incognito window; you must see the pre-join screen
+   (name field + "Ask to join"), not an error.
 2. `make bot-run MEETING_URL=<link> BOT_NAME=Spike CONSENT_ACK=true`
 3. `Spike` appears in the participant list on device A.
 4. Talk for ~20 s, stop the bot.
@@ -112,6 +124,11 @@ voice, recorded off a real Meet call you joined from a second device:
 6. Play the WAV — **your voice must be clearly audible.**
 7. Logs show the state transitions (join → admitted → recording → ended)
    and no audio bytes or recording paths with identifiers.
+
+If the meeting blocks anonymous guests, the bot fails fast (~4 s) with
+"meeting blocks anonymous guests — host must enable Quick access" and a
+screenshot in `bot/debug/`. That is a host-settings problem, not a bot
+problem — a human in an incognito window would hit the same screen.
 
 If the WAV is silent, one of the trap flags above was lost — debug before
 proceeding. This gate is the whole point of the PR.
