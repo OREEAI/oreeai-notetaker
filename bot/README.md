@@ -75,6 +75,13 @@ the standard meet-bot setup. Headful Chromium doesn't advertise
 `HeadlessChrome` in its user agent, which is the most common cause of Meet
 serving a verify/captcha/error page to an automated visitor.
 
+6. **`--disable-blink-features=AutomationControlled`** — Playwright
+   attaches via CDP, which sets `navigator.webdriver=true`, and Meet serves
+   its "You can't join this video call" block screen to clients it detects
+   as automated (even when anonymous guests are allowed — an incognito
+   window with the same link works fine). This flag suppresses the
+   automation fingerprint (`navigator.webdriver` reads `false` again).
+
 Also note: `--no-sandbox` is required because the container runs Chromium
 as a non-root user without `SYS_ADMIN`.
 

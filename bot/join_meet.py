@@ -57,6 +57,7 @@ _CHROMIUM_ARGS: tuple[str, ...] = (
     "--lang=en-US",
     "--use-fake-ui-for-media-stream",
     "--no-sandbox",
+    "--disable-blink-features=AutomationControlled",
 )
 
 
