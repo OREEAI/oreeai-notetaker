@@ -100,9 +100,16 @@ def _mute_media(
         logger.info("%s already off", label)
 
 
-def _join_and_record(page: Page, meeting_url: str, call_id: str, stop: _Stop) -> int:
+def _join_and_record(page: Page, meeting_url: str, bot_name: str, call_id: str, stop: _Stop) -> int:
     logger.info("navigating to meeting")
     page.goto(meeting_url, timeout=GOTO_TIMEOUT_MS, wait_until="domcontentloaded")
+
+    name_field = selectors.name_input(page, timeout_ms=MEDIA_MUTE_TIMEOUT_MS)
+    if name_field is not None:
+        name_field.fill(bot_name)
+        logger.info("display name set: %s", bot_name)
+    else:
+        logger.warning("name field not found; joining with Meet's default display name")
 
     _mute_media(page, selectors.microphone_toggle, "microphone")
     _mute_media(page, selectors.camera_toggle, "camera")
@@ -157,7 +164,7 @@ def _join_and_record(page: Page, meeting_url: str, call_id: str, stop: _Stop) ->
     return EXIT_OK
 
 
-def _run(meeting_url: str, call_id: str, stop: _Stop) -> int:
+def _run(meeting_url: str, bot_name: str, call_id: str, stop: _Stop) -> int:
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True, args=list(_CHROMIUM_ARGS))
         context: BrowserContext = browser.new_context(
@@ -167,7 +174,7 @@ def _run(meeting_url: str, call_id: str, stop: _Stop) -> int:
         )
         try:
             page: Page = context.new_page()
-            return _join_and_record(page, meeting_url, call_id, stop)
+            return _join_and_record(page, meeting_url, bot_name, call_id, stop)
         finally:
             context.close()
             browser.close()
@@ -203,7 +210,7 @@ def main() -> int:
     signal.signal(signal.SIGINT, _on_signal)
 
     try:
-        return _run(meeting_url, call_id, stop)
+        return _run(meeting_url, bot_name, call_id, stop)
     except Exception:
         logger.exception("unexpected bot error")
         return EXIT_BOT_ERROR

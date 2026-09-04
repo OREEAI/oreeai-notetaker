@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from playwright.sync_api import Locator, Page
 
-Role = Literal["button"]
+Role = Literal["button", "textbox"]
 RoleQuery = tuple[Role, re.Pattern[str]]
 
 _JOIN: tuple[RoleQuery, ...] = (
@@ -37,6 +37,7 @@ _CAMERA: tuple[RoleQuery, ...] = (
     ("button", re.compile(r"(turn on|turn off) camera", re.IGNORECASE)),
 )
 _LEAVE_CALL: tuple[RoleQuery, ...] = (("button", re.compile("Leave call", re.IGNORECASE)),)
+_NAME_INPUT: tuple[RoleQuery, ...] = (("textbox", re.compile(r"your name", re.IGNORECASE)),)
 _KNOCKING: re.Pattern[str] = re.compile("Asking to be let in", re.IGNORECASE)
 _CALL_ENDED: re.Pattern[str] = re.compile(
     r"meeting has ended|you'?ve left the meeting|you left the meeting",
@@ -81,6 +82,12 @@ def camera_toggle(page: Page, timeout_ms: int = 1000) -> Locator | None:
 
 def leave_call_button(page: Page, timeout_ms: int = 1000) -> Locator | None:
     return _first_visible(page, _role_locators(page, _LEAVE_CALL), timeout_ms)
+
+
+def name_input(page: Page, timeout_ms: int = 1000) -> Locator | None:
+    locators = _role_locators(page, _NAME_INPUT)
+    locators.append(page.locator('input[aria-label*="name" i]'))
+    return _first_visible(page, locators, timeout_ms)
 
 
 def knocking_indicator(page: Page, timeout_ms: int = 1000) -> Locator | None:
