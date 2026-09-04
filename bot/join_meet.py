@@ -50,6 +50,8 @@ GOTO_TIMEOUT_MS = 60000
 DEBUG_SCREENSHOT_NAME = "oreeai-debug"
 _TEXT_SNIPPET_CHARS = 300
 JOIN_BLOCK_CHECK_TIMEOUT_MS = 4000
+FIRST_ADMISSION_EVIDENCE_S = 5.0
+ADMISSION_EVIDENCE_INTERVAL_S = 30.0
 
 _CHROMIUM_ARGS: tuple[str, ...] = (
     "--autoplay-policy=no-user-gesture-required",
@@ -153,15 +155,20 @@ def _join_and_record(page: Page, meeting_url: str, bot_name: str, call_id: str, 
         logger.info("waiting to be admitted")
 
     deadline = time.monotonic() + ADMIT_TIMEOUT_S
+    next_evidence = time.monotonic() + FIRST_ADMISSION_EVIDENCE_S
     admitted = False
     while not stop.requested:
+        now = time.monotonic()
         if selectors.leave_call_button(page, timeout_ms=0) is not None:
             logger.info("admitted to the call")
             admitted = True
             break
-        if selectors.knocking_indicator(page, timeout_ms=0) is not None:
+        if now >= next_evidence:
+            _debug_screenshot(page, "waiting for admission (periodic evidence)")
+            next_evidence = now + ADMISSION_EVIDENCE_INTERVAL_S
+        elif selectors.knocking_indicator(page, timeout_ms=0) is not None:
             logger.info("still knocking (host has not admitted the bot yet)")
-        if time.monotonic() >= deadline:
+        if now >= deadline:
             _debug_screenshot(page, "never admitted")
             logger.error("not admitted within %s seconds", ADMIT_TIMEOUT_S)
             return EXIT_NEVER_ADMITTED
