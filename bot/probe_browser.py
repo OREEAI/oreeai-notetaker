@@ -37,7 +37,12 @@ logger = logging.getLogger("oreeai.bot.probe")
 
 _FINGERPRINT_JS = """() => {
   const out = {};
-  const safe = (fn) => { try { return fn(); } catch (e) { return null; } };
+  const safe = (fn) => {
+    try {
+      const v = fn();
+      return v === undefined ? "ABSENT" : v;
+    } catch (e) { return "ERROR:" + (e && e.message ? e.message : String(e)); }
+  };
   out.webdriver = safe(() => navigator.webdriver);
   out.userAgent = safe(() => navigator.userAgent);
   out.vendor = safe(() => navigator.vendor);
@@ -51,6 +56,8 @@ _FINGERPRINT_JS = """() => {
   out.timeZone = safe(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
   out.notificationPermission = safe(() => Notification.permission);
   out.uaBrands = safe(() => (navigator.userAgentData ? navigator.userAgentData.brands : null));
+  out.uaDataPresent = safe(() => !!navigator.userAgentData);
+  out.mediaDevicesPresent = safe(() => !!navigator.mediaDevices);
   out.webgl = safe(() => {
     const c = document.createElement("canvas");
     const ctx = c.getContext("webgl") || c.getContext("experimental-webgl");
@@ -110,7 +117,7 @@ _MEDIA_DEVICES_JS = """() => (navigator.mediaDevices && navigator.mediaDevices.e
 
 
 def _collect_fingerprint(page: Page) -> dict[str, Any]:
-    """Evaluate the bounded fingerprint on a blank page; mirrors the dump HTML."""
+    """Evaluate the bounded fingerprint on a real HTTPS page; mirrors the dump HTML."""
     fp: dict[str, Any] = page.evaluate(_FINGERPRINT_JS)
     fp["uaHighEntropy"] = page.evaluate(_UA_HIGH_ENTROPY_JS)
     fp["permissions"] = page.evaluate(_PERMISSIONS_JS)
@@ -167,6 +174,11 @@ def main() -> int:
                 )
                 try:
                     page = context.new_page()
+                    page.goto(
+                        "https://example.com",
+                        timeout=30000,
+                        wait_until="domcontentloaded",
+                    )
                     webdriver = page.evaluate("() => navigator.webdriver")
                     user_agent = page.evaluate("() => navigator.userAgent")
                     fingerprint = _collect_fingerprint(page)
