@@ -49,6 +49,7 @@ MEDIA_MUTE_TIMEOUT_MS = 5000
 GOTO_TIMEOUT_MS = 60000
 DEBUG_SCREENSHOT_NAME = "oreeai-debug"
 _TEXT_SNIPPET_CHARS = 300
+JOIN_BLOCK_CHECK_TIMEOUT_MS = 4000
 
 _CHROMIUM_ARGS: tuple[str, ...] = (
     "--autoplay-policy=no-user-gesture-required",
@@ -121,6 +122,13 @@ def _mute_media(
 def _join_and_record(page: Page, meeting_url: str, bot_name: str, call_id: str, stop: _Stop) -> int:
     logger.info("navigating to meeting")
     page.goto(meeting_url, timeout=GOTO_TIMEOUT_MS, wait_until="domcontentloaded")
+
+    if selectors.join_blocked_indicator(page, timeout_ms=JOIN_BLOCK_CHECK_TIMEOUT_MS) is not None:
+        _debug_screenshot(page, "meeting blocks anonymous guests (host quick access off)")
+        logger.error(
+            "meeting blocks anonymous guests - host must enable Quick access in host controls"
+        )
+        return EXIT_BOT_ERROR
 
     name_field = selectors.name_input(page, timeout_ms=MEDIA_MUTE_TIMEOUT_MS)
     if name_field is not None:

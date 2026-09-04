@@ -40,11 +40,15 @@ _LEAVE_CALL: tuple[RoleQuery, ...] = (("button", re.compile("Leave call.*", re.I
 _NAME_INPUT: tuple[RoleQuery, ...] = (("textbox", re.compile(r"your name.*", re.IGNORECASE)),)
 _KNOCKING: re.Pattern[str] = re.compile("Asking to be let in.*", re.IGNORECASE)
 _CALL_ENDED: re.Pattern[str] = re.compile(
-    r"meeting has ended.*|you'?ve left the meeting.*|you left the meeting.*",
+    r"meeting has ended.*|you[\u2019']?ve left the meeting.*|you left the meeting.*",
     re.IGNORECASE,
 )
 _REMOVED: re.Pattern[str] = re.compile(
     r"removed from the meeting.*|removed you.*",
+    re.IGNORECASE,
+)
+_JOIN_BLOCKED: re.Pattern[str] = re.compile(
+    r"you can[\u2019']?t join this video call.*",
     re.IGNORECASE,
 )
 
@@ -100,3 +104,7 @@ def call_ended_indicator(page: Page, timeout_ms: int = 1000) -> Locator | None:
 
 def removed_indicator(page: Page, timeout_ms: int = 1000) -> Locator | None:
     return _first_visible(page, _text_locators(page, (_REMOVED,)), timeout_ms)
+
+
+def join_blocked_indicator(page: Page, timeout_ms: int = 1000) -> Locator | None:
+    return _first_visible(page, _text_locators(page, (_JOIN_BLOCKED,)), timeout_ms)
