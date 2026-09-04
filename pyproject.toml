@@ -22,6 +22,7 @@ dev = [
     "ruff>=0.8.0",
     "mypy>=1.13.0",
     "aiosqlite>=0.20.0",
+    "playwright>=1.62.0",
 ]
 
 [build-system]
@@ -47,7 +48,7 @@ ignore = ["B008"]  # FastAPI DI uses function calls in defaults
 
 [tool.mypy]
 python_version = "3.13"
-files = ["src"]
+files = ["src", "bot"]
 mypy_path = "src"
 strict = true
 plugins = ["pydantic.mypy"]

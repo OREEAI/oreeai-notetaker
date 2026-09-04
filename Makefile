@@ -1,6 +1,6 @@
 UV ?= uv
 
-.PHONY: setup dev test lint format typecheck makemigrations migrate downgrade docker-up docker-down docker-logs docker-rebuild clean
+.PHONY: setup dev test lint format typecheck makemigrations migrate downgrade docker-up docker-down docker-logs docker-rebuild bot-build bot-run clean
 
 setup:
 	$(UV) sync
@@ -42,6 +42,16 @@ docker-logs:
 
 docker-rebuild:
 	docker compose build --no-cache api
+
+bot-build:
+	docker build -t oreeai-bot:local -f bot/Dockerfile .
+
+bot-run:
+	mkdir -p bot/audio && chmod 777 bot/audio
+	docker run --rm --init --shm-size=1g --name oreeai-bot-spike \
+		-e MEETING_URL -e BOT_NAME -e CONSENT_ACK -e CALL_ID -e LOG_LEVEL \
+		-v $(CURDIR)/bot/audio:/audio \
+		oreeai-bot:local
 
 clean:
 	rm -rf .venv .pytest_cache .mypy_cache .ruff_cache dist build *.egg-info
