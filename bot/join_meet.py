@@ -166,11 +166,22 @@ def _mute_media(
     page: Page,
     toggle: Callable[..., Locator | None],
     label: str,
-) -> None:
+    *,
+    required: bool = False,
+) -> bool:
+    """Mute a pre-join toggle. Returns True when muted or already off.
+
+    When required and the toggle is not found, returns False so the caller
+    can refuse to join: a notetaker must never join with a live mic (the
+    container mic hears the call's own output, so an open mic echoes).
+    """
     locator = toggle(page, timeout_ms=MEDIA_MUTE_TIMEOUT_MS)
     if locator is None:
+        if required:
+            logger.error("%s toggle not found; refusing to join unmuted (echo risk)", label)
+            return False
         logger.warning("%s toggle not found; continuing without muting", label)
-        return
+        return True
     aria = locator.get_attribute("aria-label") or ""
     if aria.lower().startswith("turn off"):
         move_to(page, locator)
@@ -178,6 +189,7 @@ def _mute_media(
         logger.info("%s muted before joining", label)
     else:
         logger.info("%s already off", label)
+    return True
 
 
 def _join_and_record(page: Page, meeting_url: str, bot_name: str, call_id: str, stop: _Stop) -> int:
@@ -200,7 +212,9 @@ def _join_and_record(page: Page, meeting_url: str, bot_name: str, call_id: str, 
         logger.warning("name field not found; joining with Meet's default display name")
 
     pause_between_actions(page)
-    _mute_media(page, selectors.microphone_toggle, "microphone")
+    if not _mute_media(page, selectors.microphone_toggle, "microphone", required=True):
+        _debug_screenshot(page, "microphone toggle not found")
+        return EXIT_BOT_ERROR
     pause_between_actions(page)
     _mute_media(page, selectors.camera_toggle, "camera")
 
@@ -247,21 +261,23 @@ def _join_and_record(page: Page, meeting_url: str, bot_name: str, call_id: str, 
     recorder = Recorder(f"/audio/{call_id}.wav")
     recorder.start()
     logger.info("recording started")
-    missed = 0
-    while not stop.requested:
-        page.wait_for_timeout(int(POLL_INTERVAL_S * 1000))
-        if selectors.leave_call_button(page, timeout_ms=0) is not None:
-            missed = 0
-            continue
-        missed += 1
-        if selectors.call_ended_indicator(page, timeout_ms=500) is not None:
-            logger.info("call ended")
-            break
-        if missed >= ENDED_CONFIRMATION_POLLS:
-            logger.info("in-call indicators gone for %s polls; treating as call ended", missed)
-            break
-    recorder.stop()
-    logger.info("recording stopped")
+    try:
+        missed = 0
+        while not stop.requested:
+            page.wait_for_timeout(int(POLL_INTERVAL_S * 1000))
+            if selectors.leave_call_button(page, timeout_ms=0) is not None:
+                missed = 0
+                continue
+            missed += 1
+            if selectors.call_ended_indicator(page, timeout_ms=500) is not None:
+                logger.info("call ended")
+                break
+            if missed >= ENDED_CONFIRMATION_POLLS:
+                logger.info("in-call indicators gone for %s polls; treating as call ended", missed)
+                break
+    finally:
+        recorder.stop()
+        logger.info("recording stopped")
     return EXIT_OK
 
 
