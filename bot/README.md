@@ -23,9 +23,11 @@ with `Ctrl-C` or `docker stop oreeai-bot-spike` — SIGTERM is handled
 gracefully, the recording is finalized before exit.
 
 `make bot-build` stamps the image with the building commit (`ENV GIT_SHA`
-via `--build-arg`); the bot and the probe log it as `image_sha=` at
-startup. `make bot-run` rebuilds from HEAD first (cached: seconds when
-unchanged), so a gate log always identifies the exact code under test.
+via `--build-arg`, placed just above the `COPY bot/...` tail so rebuilds
+stay cached); a `-dirty` suffix marks builds from an uncommitted tree. The
+bot and the probe log it as `image_sha=` at startup. `make bot-run`
+rebuilds from HEAD first (cached: seconds when unchanged), so a gate log
+always identifies the exact code under test.
 
 ## Launch probe
 
@@ -126,7 +128,10 @@ serving a verify/captcha/error page to an automated visitor.
      Playwright's automation-flavored defaults (metrics, sync, phishing,
      component updater, backgrounding, extensions, updater). The
      `--disable/enable-features` pair is Playwright-forced residue that
-     `ignore_default_args` cannot strip (exact-match semantics) — accepted. Kept: `--no-first-run`,
+     `ignore_default_args` cannot strip (exact-match semantics) — accepted,
+     along with deliberately kept `--no-default-browser-check` (avoids a
+     default-browser modal) and argv-only `--no-sandbox` /
+     `--enable-unsafe-swiftshader` (not page-visible). Kept: `--no-first-run`,
      `--password-store=basic`/`--use-mock-keychain`, search-engine-choice
      (all avoid first-run modals in the temp profile). Playwright re-adds
      `--disable-features`/`--enable-features` unconditionally — accepted,

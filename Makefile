@@ -48,7 +48,8 @@ bot-build:
 
 # Image is stamped with the building commit; bot-run rebuilds first (cached:
 # seconds when unchanged) so a gate log always identifies the code under test.
-GIT_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+# The -dirty suffix marks images built from an uncommitted working tree.
+GIT_SHA ?= $(shell sha=$$(git rev-parse --short HEAD 2>/dev/null || echo unknown); test -n "$$(git status --porcelain 2>/dev/null)" && sha=$${sha}-dirty; echo $$sha)
 
 bot-run: bot-build
 	mkdir -p bot/audio bot/debug && chmod 777 bot/audio bot/debug

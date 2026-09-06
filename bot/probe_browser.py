@@ -157,6 +157,7 @@ def main() -> int:
         level=os.environ.get("LOG_LEVEL", "INFO").upper(),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    logger.info("image_sha=%s", os.environ.get("GIT_SHA", "unknown"))
     if "DISPLAY" not in os.environ:
         logger.error("DISPLAY is not set; probe must run headful under Xvfb (make bot-probe)")
         return 1
@@ -190,7 +191,6 @@ def main() -> int:
         logger.exception("probe failed: browser did not launch or evaluate")
         return 1
     logger.info("channel=%s", BROWSER_CHANNEL)
-    logger.info("image_sha=%s", os.environ.get("GIT_SHA", "unknown"))
     logger.info("user_agent=%s", user_agent)
     logger.info("navigator.webdriver=%s", webdriver)
     logger.info("fingerprint=%s", json.dumps(fingerprint, sort_keys=True, default=str))

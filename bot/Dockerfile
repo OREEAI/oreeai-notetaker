@@ -1,8 +1,5 @@
 FROM python:3.13-slim
 
-ARG GIT_SHA=unknown
-ENV GIT_SHA=${GIT_SHA}
-
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -38,6 +35,10 @@ RUN useradd --create-home --uid 1000 bot \
     && chown -R bot:bot /run/pulse /audio
 
 WORKDIR /app
+# Code identity stamp, placed here (not at the top) so SHA changes only
+# invalidate this cheap tail - the apt/pip/Playwright layers stay cached.
+ARG GIT_SHA=unknown
+ENV GIT_SHA=${GIT_SHA}
 COPY bot/__init__.py bot/join_meet.py bot/selectors.py bot/record_audio.py bot/probe_browser.py bot/stealth.py bot/humanize.py /app/bot/
 COPY bot/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh \
