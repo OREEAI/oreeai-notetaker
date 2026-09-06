@@ -24,8 +24,9 @@ _START_GRACE_S = 1.0
 _STOP_TIMEOUT_S = 5.0
 _STDERR_TAIL_LINES = 20
 
+# parec has no --monitor-source option: recording from a sink records its monitor.
 PAREC_ARGS: tuple[str, ...] = (
-    "--monitor-source=virtual_speaker.monitor",
+    "--device=virtual_speaker.monitor",
     "--rate=16000",
     "--channels=1",
     "--format=s16le",

@@ -51,8 +51,9 @@ mount writable: `chmod 777 bot/audio` (the Makefile target does this for you).
 ## Audio format (pinned — never changes)
 
 Container WAV: **16-bit PCM, 16 kHz, mono** — recorded via
-`parec --monitor-source=virtual_speaker.monitor --rate=16000 --channels=1
---format=s16le --file-format=wav`. ≈ 115 MB/hour. Both Deepgram and
+`parec --device=virtual_speaker.monitor --rate=16000 --channels=1
+--format=s16le --file-format=wav` (recording from a sink captures its
+monitor; `parec` has no `--monitor-source` option). ≈ 115 MB/hour. Both Deepgram and
 AssemblyAI accept it directly; no downstream transcode is ever needed.
 
 Verify with:
