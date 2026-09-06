@@ -44,9 +44,13 @@ docker-rebuild:
 	docker compose build --no-cache api
 
 bot-build:
-	docker build -t oreeai-bot:local -f bot/Dockerfile .
+	docker build --build-arg GIT_SHA=$(GIT_SHA) -t oreeai-bot:local -f bot/Dockerfile .
 
-bot-run:
+# Image is stamped with the building commit; bot-run rebuilds first (cached:
+# seconds when unchanged) so a gate log always identifies the code under test.
+GIT_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+
+bot-run: bot-build
 	mkdir -p bot/audio bot/debug && chmod 777 bot/audio bot/debug
 	docker run --rm --init --shm-size=1g --name oreeai-bot-spike \
 		$(GPU_FLAGS) \

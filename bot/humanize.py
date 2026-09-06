@@ -43,8 +43,10 @@ def move_to(page: Page, target: Locator) -> None:
 
 
 def type_text(page: Page, field: Locator, text: str) -> None:
-    """Click the field, then type it key-by-key with human jitter."""
+    """Click the field, clear any pre-filled value, then type key-by-key."""
     field.click()
+    field.press("ControlOrMeta+a")
+    field.press("Delete")
     for char in text:
         page.wait_for_timeout(int(_jitter(40, 120)))
         page.keyboard.type(char)

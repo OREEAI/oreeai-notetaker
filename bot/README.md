@@ -22,6 +22,11 @@ troubleshooting screenshots. Both are gitignored local dirs. Stop the bot
 with `Ctrl-C` or `docker stop oreeai-bot-spike` — SIGTERM is handled
 gracefully, the recording is finalized before exit.
 
+`make bot-build` stamps the image with the building commit (`ENV GIT_SHA`
+via `--build-arg`); the bot and the probe log it as `image_sha=` at
+startup. `make bot-run` rebuilds from HEAD first (cached: seconds when
+unchanged), so a gate log always identifies the exact code under test.
+
 ## Launch probe
 
 `make bot-probe` launches the browser inside the container exactly as the bot
@@ -119,7 +124,9 @@ serving a verify/captcha/error page to an automated visitor.
      accepted, documented).
    - `ignore_default_args` (`_BROWSER_IGNORED_ARGS` in `join_meet.py`) drops
      Playwright's automation-flavored defaults (metrics, sync, phishing,
-     component updater, backgrounding, feature kills). Kept: `--no-first-run`,
+     component updater, backgrounding, extensions, updater). The
+     `--disable/enable-features` pair is Playwright-forced residue that
+     `ignore_default_args` cannot strip (exact-match semantics) — accepted. Kept: `--no-first-run`,
      `--password-store=basic`/`--use-mock-keychain`, search-engine-choice
      (all avoid first-run modals in the temp profile). Playwright re-adds
      `--disable-features`/`--enable-features` unconditionally — accepted,

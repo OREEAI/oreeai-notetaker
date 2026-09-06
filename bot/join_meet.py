@@ -65,8 +65,9 @@ FIRST_ADMISSION_EVIDENCE_S = 5.0
 ADMISSION_EVIDENCE_INTERVAL_S = 30.0
 
 # Branded Google Chrome: Meet's server-side anti-bot check detects Playwright's
-# bundled Chromium build at join time. `bot/probe_browser.py` imports this
-# constant and `_CHROMIUM_ARGS` verbatim so the probe cannot drift.
+# bundled Chromium build at join time. The shared `launch_browser()` helper
+# below is used by the bot and `bot/probe_browser.py` alike, so the probe
+# cannot drift from the shipped launch config.
 BROWSER_CHANNEL: str | None = "chrome"
 
 _CHROMIUM_ARGS: tuple[str, ...] = (
@@ -82,9 +83,12 @@ _CHROMIUM_ARGS: tuple[str, ...] = (
 
 # Playwright default launch flags that scream automation (dropped via
 # ignore_default_args so the browser runs closer to a human install).
-# Kept: --no-first-run, --password-store/--use-mock-keychain (no keyring in
-# the container), --disable-search-engine-choice-screen (avoids a first-run
-# modal), plus everything in _CHROMIUM_ARGS. Verified harmless by the probe.
+# --disable-features/--enable-features are deliberately NOT here: Playwright
+# matches ignored args by exact full string, and those defaults carry values,
+# so such entries never match — the residue is accepted (low-signal). Kept
+# for function: --no-first-run, --password-store/--use-mock-keychain (no
+# keyring in the container), --disable-search-engine-choice-screen (avoids a
+# first-run modal), plus everything in _CHROMIUM_ARGS. Verified by the probe.
 _BROWSER_IGNORED_ARGS: tuple[str, ...] = (
     "--disable-field-trial-config",
     "--disable-background-networking",
@@ -96,8 +100,8 @@ _BROWSER_IGNORED_ARGS: tuple[str, ...] = (
     "--disable-component-extensions-with-background-pages",
     "--disable-component-update",
     "--disable-default-apps",
-    "--disable-features",
-    "--enable-features",
+    "--disable-extensions",
+    "--disable-updater-scheduler",
     "--disable-hang-monitor",
     "--disable-ipc-flooding-protection",
     "--disable-popup-blocking",
@@ -229,7 +233,7 @@ def _join_and_record(page: Page, meeting_url: str, bot_name: str, call_id: str, 
         if now >= next_evidence:
             _debug_screenshot(page, "waiting for admission (periodic evidence)")
             next_evidence = now + ADMISSION_EVIDENCE_INTERVAL_S
-        elif selectors.knocking_indicator(page, timeout_ms=0) is not None:
+        if selectors.knocking_indicator(page, timeout_ms=0) is not None:
             logger.info("still knocking (host has not admitted the bot yet)")
         if now >= deadline:
             _debug_screenshot(page, "never admitted")
@@ -304,10 +308,11 @@ def main() -> int:
         logger.error("MEETING_URL is required")
         return EXIT_BOT_ERROR
     logger.info(
-        "oreeai bot spike starting: name=%s call_id=%s consent_ack=%s",
+        "oreeai bot spike starting: name=%s call_id=%s consent_ack=%s image_sha=%s",
         bot_name,
         call_id,
         consent_ack,
+        os.environ.get("GIT_SHA", "unknown"),
     )
     if not consent_ack:
         logger.warning("CONSENT_ACK not set; accepted in the spike, enforcement lands in PR 3")

@@ -190,6 +190,7 @@ def main() -> int:
         logger.exception("probe failed: browser did not launch or evaluate")
         return 1
     logger.info("channel=%s", BROWSER_CHANNEL)
+    logger.info("image_sha=%s", os.environ.get("GIT_SHA", "unknown"))
     logger.info("user_agent=%s", user_agent)
     logger.info("navigator.webdriver=%s", webdriver)
     logger.info("fingerprint=%s", json.dumps(fingerprint, sort_keys=True, default=str))
