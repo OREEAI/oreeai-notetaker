@@ -25,9 +25,13 @@ gracefully, the recording is finalized before exit.
 ## Launch probe
 
 `make bot-probe` launches the browser inside the container exactly as the bot
-does (same channel and flags, imported verbatim from `bot/join_meet.py` so the
+does (same launch call, imported verbatim from `bot.join_meet`, so the
 probe cannot drift from what the bot ships) and checks it comes up headful
-under Xvfb with `navigator.webdriver` false. Re-run it after any Dockerfile
+under Xvfb with `navigator.webdriver` false. It also dumps a bounded
+fingerprint (`fingerprint=<json>`) plus the real launch argv
+(`browser_argv=<...>`); diff those against the same host's Chrome incognito
+output from `plans/handoffs/fingerprint-dump.html` to rank what still
+distinguishes the automated client. Re-run it after any Dockerfile
 or launch-config change, before spending a manual gate run on it.
 
 ## Env vars
@@ -98,6 +102,40 @@ serving a verify/captcha/error page to an automated visitor.
    installs branded Google Chrome (`playwright install chrome --with-deps`;
    ~300–500 MB larger) and `join_meet.py` launches it via
    `channel="chrome"`; the bundled Chromium install stays as an A/B baseline.
+
+8. **Fingerprint realism (option-B stealth pass).** Meet scores the join
+   request against the client environment, so the bot closes every measured
+   gap vs a real Chrome install (verified with `make bot-probe` against the
+   same host's incognito dump — see Launch probe):
+   - `--force-device-scale-factor=1.25` + Xvfb `2400x1350x24` + viewport
+     `1920x1080` reproduce the host's screen (1920x1080 @ dpr 1.25).
+   - `TZ` env (Makefile `TZ ?= Africa/Lagos`, overridable) — the Intl
+     timezone is fingerprint-visible.
+   - `fonts-noto-core` + a `fontconfig` `local.conf` preferring Noto Sans /
+     Noto Serif, so default-family text metrics match a desktop install.
+   - `--accept-lang=en-US,en` aligns the Accept-Language header (JS
+     `navigator.languages` stays `["en-US"]` without a persistent profile —
+     accepted, documented).
+   - `ignore_default_args` (`_BROWSER_IGNORED_ARGS` in `join_meet.py`) drops
+     Playwright's automation-flavored defaults (metrics, sync, phishing,
+     component updater, backgrounding, feature kills). Kept: `--no-first-run`,
+     `--password-store=basic`/`--use-mock-keychain`, search-engine-choice
+     (all avoid first-run modals in the temp profile). Playwright re-adds
+     `--disable-features`/`--enable-features` unconditionally — accepted,
+     low-signal residue.
+   - `bot/humanize.py` — dwell 4–8 s, mouse paths, per-key typing jitter,
+     click holds, inter-action pauses. Same flow order; selectors untouched.
+   - `bot/stealth.py` — masks the software WebGL renderer string with the
+     exact host values. Rationale: `--device /dev/dri` passthrough (Makefile
+     `GPU_FLAGS`, no-op without `/dev/dri`) plus ANGLE-on-GL still left
+     SwiftShader — and on the retry broke context creation entirely — so the
+     container renders in software and the string is spoofed instead. A
+     `module-remap-source` (`virtual_mic`) in the entrypoint gives Chromium a
+     real audio input device from the null-sink monitor (no fake-device flag
+     ever — that would break capture and add a tell).
+   - Launch config (channel, flags, ignored args) lives behind
+     `launch_browser()` in `join_meet.py`, shared by the bot and the probe,
+     so the probe cannot drift from what ships.
 
 Also note: `--no-sandbox` is required because the container runs Chromium
 as a non-root user without `SYS_ADMIN`.

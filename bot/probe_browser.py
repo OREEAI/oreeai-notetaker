@@ -1,9 +1,9 @@
 """In-container browser launch probe (dev tool, not part of the bot flow).
 
-Verifies that the shipped launch config — the Playwright channel plus the
-Chromium flags, both imported verbatim from `bot.join_meet` so this probe
-cannot drift from what the bot actually ships — launches headful under Xvfb
-and does not advertise automation (`navigator.webdriver` reads false).
+Verifies that the shipped launch call — imported verbatim from
+`bot.join_meet.launch_browser` so this probe cannot drift from what the bot
+actually ships — launches headful under Xvfb and does not advertise
+automation (`navigator.webdriver` reads false).
 
 Also dumps a bounded client fingerprint (`fingerprint=<json>`) and the
 browser's real launch argv read from /proc (`browser_argv=<...>`), so a
@@ -31,7 +31,8 @@ from typing import Any
 
 from playwright.sync_api import Page, sync_playwright
 
-from bot.join_meet import _CHROMIUM_ARGS, BROWSER_CHANNEL
+from bot.join_meet import BROWSER_CHANNEL, launch_browser
+from bot.stealth import apply_stealth
 
 logger = logging.getLogger("oreeai.bot.probe")
 
@@ -161,17 +162,15 @@ def main() -> int:
         return 1
     try:
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(
-                channel=BROWSER_CHANNEL,
-                headless=False,
-                args=list(_CHROMIUM_ARGS),
-            )
+            browser = launch_browser(playwright)
             try:
                 context = browser.new_context(
                     locale="en-US",
                     permissions=["microphone", "camera"],
-                    viewport={"width": 1280, "height": 720},
+                    viewport={"width": 1920, "height": 1080},
+                    device_scale_factor=1.25,
                 )
+                apply_stealth(context)
                 try:
                     page = context.new_page()
                     page.goto(

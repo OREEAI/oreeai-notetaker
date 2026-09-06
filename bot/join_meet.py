@@ -30,10 +30,18 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from playwright.sync_api import BrowserContext, Page, sync_playwright
+from playwright.sync_api import Browser, BrowserContext, Page, Playwright, sync_playwright
 
 from bot import selectors
+from bot.humanize import (
+    click_like_human,
+    dwell_before_start,
+    move_to,
+    pause_between_actions,
+    type_text,
+)
 from bot.record_audio import Recorder
+from bot.stealth import apply_stealth
 
 if TYPE_CHECKING:
     from playwright.sync_api import Locator
@@ -65,9 +73,46 @@ _CHROMIUM_ARGS: tuple[str, ...] = (
     "--autoplay-policy=no-user-gesture-required",
     "--disable-dev-shm-usage",
     "--lang=en-US",
+    "--accept-lang=en-US,en",
+    "--force-device-scale-factor=1.25",
     "--use-fake-ui-for-media-stream",
     "--no-sandbox",
     "--disable-blink-features=AutomationControlled",
+)
+
+# Playwright default launch flags that scream automation (dropped via
+# ignore_default_args so the browser runs closer to a human install).
+# Kept: --no-first-run, --password-store/--use-mock-keychain (no keyring in
+# the container), --disable-search-engine-choice-screen (avoids a first-run
+# modal), plus everything in _CHROMIUM_ARGS. Verified harmless by the probe.
+_BROWSER_IGNORED_ARGS: tuple[str, ...] = (
+    "--disable-field-trial-config",
+    "--disable-background-networking",
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-back-forward-cache",
+    "--disable-breakpad",
+    "--disable-client-side-phishing-detection",
+    "--disable-component-extensions-with-background-pages",
+    "--disable-component-update",
+    "--disable-default-apps",
+    "--disable-features",
+    "--enable-features",
+    "--disable-hang-monitor",
+    "--disable-ipc-flooding-protection",
+    "--disable-popup-blocking",
+    "--disable-prompt-on-repost",
+    "--disable-renderer-backgrounding",
+    "--disable-sync",
+    "--allow-pre-commit-input",
+    "--force-color-profile=srgb",
+    "--metrics-recording-only",
+    "--disable-infobars",
+    "--unsafely-disable-devtools-self-xss-warnings",
+    "--no-service-autorun",
+    "--export-tagged-pdf",
+    "--edge-skip-compat-layer-relaunch",
+    "--disable-edgeupdater",
 )
 
 
@@ -124,7 +169,8 @@ def _mute_media(
         return
     aria = locator.get_attribute("aria-label") or ""
     if aria.lower().startswith("turn off"):
-        locator.click()
+        move_to(page, locator)
+        click_like_human(locator)
         logger.info("%s muted before joining", label)
     else:
         logger.info("%s already off", label)
@@ -141,14 +187,17 @@ def _join_and_record(page: Page, meeting_url: str, bot_name: str, call_id: str, 
         )
         return EXIT_BOT_ERROR
 
+    dwell_before_start(page)
     name_field = selectors.name_input(page, timeout_ms=MEDIA_MUTE_TIMEOUT_MS)
     if name_field is not None:
-        name_field.fill(bot_name)
+        type_text(page, name_field, bot_name)
         logger.info("display name set: %s", bot_name)
     else:
         logger.warning("name field not found; joining with Meet's default display name")
 
+    pause_between_actions(page)
     _mute_media(page, selectors.microphone_toggle, "microphone")
+    pause_between_actions(page)
     _mute_media(page, selectors.camera_toggle, "camera")
 
     join = selectors.join_button(page, timeout_ms=int(JOIN_BUTTON_TIMEOUT_S * 1000))
@@ -157,7 +206,9 @@ def _join_and_record(page: Page, meeting_url: str, bot_name: str, call_id: str, 
         logger.error("could not find a way to join the meeting")
         return EXIT_BOT_ERROR
     knocking = (join.get_attribute("aria-label") or "").lower().startswith("ask")
-    join.click()
+    pause_between_actions(page)
+    move_to(page, join)
+    click_like_human(join)
     logger.info("join clicked (%s)", "knocking" if knocking else "direct")
     if knocking:
         logger.info("waiting to be admitted")
@@ -210,18 +261,30 @@ def _join_and_record(page: Page, meeting_url: str, bot_name: str, call_id: str, 
     return EXIT_OK
 
 
+def launch_browser(playwright: Playwright) -> Browser:
+    """Launch branded Chrome exactly as the bot ships it.
+
+    Shared by `_run` and `bot/probe_browser.py` so the probe can never
+    drift from the shipped launch config (channel, flags, ignored defaults).
+    """
+    return playwright.chromium.launch(
+        channel=BROWSER_CHANNEL,
+        headless=False,
+        args=list(_CHROMIUM_ARGS),
+        ignore_default_args=list(_BROWSER_IGNORED_ARGS),
+    )
+
+
 def _run(meeting_url: str, bot_name: str, call_id: str, stop: _Stop) -> int:
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(
-            channel=BROWSER_CHANNEL,
-            headless=False,
-            args=list(_CHROMIUM_ARGS),
-        )
+        browser = launch_browser(playwright)
         context: BrowserContext = browser.new_context(
             locale="en-US",
             permissions=["microphone", "camera"],
-            viewport={"width": 1280, "height": 720},
+            viewport={"width": 1920, "height": 1080},
+            device_scale_factor=1.25,
         )
+        apply_stealth(context)
         try:
             page: Page = context.new_page()
             return _join_and_record(page, meeting_url, bot_name, call_id, stop)

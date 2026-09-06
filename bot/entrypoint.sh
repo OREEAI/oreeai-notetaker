@@ -2,7 +2,7 @@
 set -euo pipefail
 
 export DISPLAY="${DISPLAY:-:99}"
-Xvfb :99 -screen 0 1280x720x24 -nolisten tcp &
+Xvfb :99 -screen 0 2400x1350x24 -nolisten tcp &
 for _ in $(seq 1 25); do sleep 0.2; done
 
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/runtime-$(id -u)}"
@@ -11,6 +11,7 @@ chmod 700 "$XDG_RUNTIME_DIR"
 
 pulseaudio --start --exit-idle-time=-1 --disable-shm
 pactl load-module module-null-sink sink_name=virtual_speaker >/dev/null
+pactl load-module module-remap-source master=virtual_speaker.monitor source_name=virtual_mic source_properties=device.description=Virtual_Microphone >/dev/null
 pactl load-module module-native-protocol-unix socket=/run/pulse/native >/dev/null
 pactl set-default-sink virtual_speaker >/dev/null
 
