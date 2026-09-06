@@ -39,7 +39,7 @@ WORKDIR /app
 # invalidate this cheap tail - the apt/pip/Playwright layers stay cached.
 ARG GIT_SHA=unknown
 ENV GIT_SHA=${GIT_SHA}
-COPY bot/__init__.py bot/join_meet.py bot/selectors.py bot/record_audio.py bot/probe_browser.py bot/stealth.py bot/humanize.py /app/bot/
+COPY bot/ /app/bot/
 COPY bot/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh \
     && chown -R bot:bot /app

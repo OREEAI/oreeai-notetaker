@@ -65,7 +65,7 @@ GPU_FLAGS := $(shell test -e /dev/dri && echo "--device /dev/dri --group-add 44 
 # Container timezone (Intl API is fingerprint-visible); override per host, e.g. TZ=UTC.
 TZ ?= Africa/Lagos
 
-bot-probe:
+bot-probe: bot-build
 	docker run --rm --shm-size=1g $(GPU_FLAGS) -e TZ=$(TZ) --entrypoint bash oreeai-bot:local -c 'Xvfb :99 -screen 0 2400x1350x24 -nolisten tcp & sleep 1; export XDG_RUNTIME_DIR=/tmp/runtime-$$(id -u); mkdir -p $$XDG_RUNTIME_DIR; pulseaudio --start --exit-idle-time=-1 --disable-shm; pactl load-module module-null-sink sink_name=virtual_speaker >/dev/null; pactl load-module module-remap-source master=virtual_speaker.monitor source_name=virtual_mic >/dev/null; DISPLAY=:99 python -m bot.probe_browser'
 
 clean:

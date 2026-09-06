@@ -45,6 +45,10 @@ class Recorder:
     def wav_path(self) -> str:
         return self._wav_path
 
+    def is_running(self) -> bool:
+        """True while the parec child is alive (unexpected death ⇒ exit 5)."""
+        return self._proc is not None and self._proc.poll() is None
+
     def start(self) -> None:
         os.makedirs(os.path.dirname(self._wav_path) or ".", exist_ok=True)
         self._stderr_tail = []

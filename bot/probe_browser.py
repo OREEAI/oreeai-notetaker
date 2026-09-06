@@ -153,10 +153,16 @@ def _browser_argv() -> str | None:
 
 
 def main() -> int:
+    raw = os.environ.get("LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, raw, None)
+    if not isinstance(level, int):
+        level = logging.INFO
     logging.basicConfig(
-        level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+        level=level,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    if not isinstance(getattr(logging, raw, None), int):
+        logger.warning("unknown LOG_LEVEL %r; using INFO", raw)
     logger.info("image_sha=%s", os.environ.get("GIT_SHA", "unknown"))
     if "DISPLAY" not in os.environ:
         logger.error("DISPLAY is not set; probe must run headful under Xvfb (make bot-probe)")

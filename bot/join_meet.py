@@ -121,10 +121,16 @@ _BROWSER_IGNORED_ARGS: tuple[str, ...] = (
 
 
 def _configure_logging() -> None:
+    raw = os.environ.get("LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, raw, None)
+    if not isinstance(level, int):
+        level = logging.INFO
     logging.basicConfig(
-        level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+        level=level,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    if not isinstance(getattr(logging, raw, None), int):
+        logger.warning("unknown LOG_LEVEL %r; using INFO", raw)
 
 
 class _Stop:
@@ -265,6 +271,9 @@ def _join_and_record(page: Page, meeting_url: str, bot_name: str, call_id: str, 
         missed = 0
         while not stop.requested:
             page.wait_for_timeout(int(POLL_INTERVAL_S * 1000))
+            if not recorder.is_running():
+                logger.error("parec died mid-recording; leaving with a truncated WAV")
+                return EXIT_BOT_ERROR
             if selectors.leave_call_button(page, timeout_ms=0) is not None:
                 missed = 0
                 continue
