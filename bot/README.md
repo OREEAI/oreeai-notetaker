@@ -36,9 +36,9 @@ does (same launch call, imported verbatim from `bot.join_meet`, so the
 probe cannot drift from what the bot ships) and checks it comes up headful
 under Xvfb with `navigator.webdriver` false. It also dumps a bounded
 fingerprint (`fingerprint=<json>`) plus the real launch argv
-(`browser_argv=<...>`); diff those against the same host's Chrome incognito
-output from `plans/handoffs/fingerprint-dump.html` to rank what still
-distinguishes the automated client. Re-run it after any Dockerfile
+(`browser_argv=<...>`); diff those field-by-field against the same host's
+Chrome incognito output to rank what still distinguishes the automated
+client. Re-run it after any Dockerfile
 or launch-config change, before spending a manual gate run on it.
 
 ## Env vars

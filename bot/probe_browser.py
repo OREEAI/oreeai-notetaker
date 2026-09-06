@@ -7,9 +7,8 @@ automation (`navigator.webdriver` reads false).
 
 Also dumps a bounded client fingerprint (`fingerprint=<json>`) and the
 browser's real launch argv read from /proc (`browser_argv=<...>`), so a
-fingerprint diff against a real Chrome incognito session (see
-`plans/handoffs/fingerprint-dump.html`) can rank what still distinguishes
-the automated client. Keep the field list in sync with that file manually.
+fingerprint diff against the same fields dumped from a real Chrome
+incognito session can rank what still distinguishes the automated client.
 
 The fingerprint contains no identifiers: device counts, not device IDs;
 media-device label presence, not labels; plugin names, not paths.
