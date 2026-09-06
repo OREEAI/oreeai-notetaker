@@ -1,0 +1,7 @@
+audio/
+debug/
+*.wav
+*.png
+__pycache__/
+*.pyc
+.git/
