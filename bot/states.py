@@ -40,6 +40,10 @@ _DEFAULT_SELECTOR_SET: SelectorSet = selectors
 _POLL_TIMEOUT_MS = 0
 _DETAIL_CHARS = 120
 _PARTICIPANT_COUNT_RE = re.compile(r"people\s*\((\d+)\)", re.IGNORECASE)
+# Current Meet renders the count chip as a bare digit (no "People (N)"
+# wrapper) on the participants control. Match only a standalone number so a
+# longer label can never misparse.
+_BARE_COUNT_RE = re.compile(r"^\s*\(?\s*(\d{1,3})\s*\)?\s*$")
 
 
 def _normalize(text: str) -> str:
@@ -146,10 +150,14 @@ def participant_count(
     label = button.get_attribute("aria-label") or ""
     text = _safe_inner_text(button)
     match = _PARTICIPANT_COUNT_RE.search(label) or _PARTICIPANT_COUNT_RE.search(text)
-    if match is None:
+    count_text = match.group(1) if match is not None else None
+    if count_text is None:
+        bare = _BARE_COUNT_RE.match(label) or _BARE_COUNT_RE.match(text)
+        count_text = bare.group(1) if bare is not None else None
+    if count_text is None:
         return None, f"participant count unavailable ({_locator_detail(button)})"
 
-    count = int(match.group(1))
+    count = int(count_text)
     noun = "participant" if count == 1 else "participants"
     return count, f"{count} {noun} in call"
 

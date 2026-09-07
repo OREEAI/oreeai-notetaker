@@ -40,7 +40,8 @@ _LEAVE_CALL: tuple[RoleQuery, ...] = (("button", re.compile("Leave call.*", re.I
 _NAME_INPUT: tuple[RoleQuery, ...] = (("textbox", re.compile(r"your name.*", re.IGNORECASE)),)
 _KNOCKING: re.Pattern[str] = re.compile("Asking to be let in.*", re.IGNORECASE)
 _CALL_ENDED: re.Pattern[str] = re.compile(
-    r"meeting has ended.*|you[\u2019']?ve left the meeting.*|you left the meeting.*",
+    r"meeting has ended.*|you[\u2019']?ve left the meeting.*|you left the meeting.*|"
+    r"host ended the meeting.*",
     re.IGNORECASE,
 )
 _REMOVED: re.Pattern[str] = re.compile(

@@ -61,6 +61,16 @@ def test_participant_counts(fixture: str, expected: int) -> None:
     assert str(expected) in detail
 
 
+def test_bare_digit_count_chip() -> None:
+    # Current Meet renders the count as a bare digit on the control.
+    admitted, _ = states.is_admitted(page("in_call_bare_count.html"))
+    count, detail = states.participant_count(page("in_call_bare_count.html"))
+
+    assert admitted is True
+    assert count == 2
+    assert "2 participants" in detail
+
+
 def test_unknown_participant_count_is_not_empty() -> None:
     count, detail = states.participant_count(page("in_call_no_count.html"))
     alone, alone_detail = states.bot_alone_in_call(page("in_call_no_count.html"))
@@ -97,6 +107,13 @@ def test_call_ended_state() -> None:
     assert waiting is False
     assert admitted is False
     assert removed is False
+
+
+def test_host_ended_state() -> None:
+    ended, detail = states.is_call_ended(page("call_ended_host.html"))
+
+    assert ended is True
+    assert "host ended the meeting" in detail.casefold()
 
 
 def test_removed_state() -> None:
