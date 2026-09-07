@@ -84,6 +84,12 @@ def test_account_display_name_parsed() -> None:
     assert consent.account_display_name(page("signed_in.html")) == "Oree Notetaker"
 
 
+def test_account_display_name_from_avatar_text() -> None:
+    # Regression (PR 3 run 1): the live myaccount.google.com avatar exposes
+    # its accessible name through inner text, not an aria-label.
+    assert consent.account_display_name(page("signed_in_text.html")) == "Oree Notetaker"
+
+
 def test_account_display_name_absent_is_none() -> None:
     assert consent.account_display_name(page("waiting_room.html")) is None
 

@@ -284,13 +284,16 @@ def _check_session(page: Page) -> BotOutcome | None:
         return BotOutcome(EXIT_BOT_ERROR, None, reason)
     signed_in, detail = states.is_signed_in(page)
     if signed_in:
-        logger.info("google session active (%s)", detail)
+        logger.info("%s", detail)
+        display_name = consent.account_display_name(page)
         identity_problem = consent.verify_consent_identity(
-            consent.account_display_name(page), environment=consent.environment()
+            display_name, environment=consent.environment()
         )
         if identity_problem is not None:
             logger.error("%s", identity_problem)
             return BotOutcome(EXIT_BOT_ERROR, None, f"consent identity: {identity_problem}")
+        if display_name == consent.BOT_NAME_FIXED:
+            logger.info("consent identity verified: '%s'", display_name)
         return None
     reason = f"google session invalid: {detail} (run make bot-login to sign in)"
     logger.error("%s", reason)

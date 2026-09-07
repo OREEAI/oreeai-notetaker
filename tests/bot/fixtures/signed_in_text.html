@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Google Account</title></head>
+<body>
+<header>
+<h1>Google Account</h1>
+<p>Welcome back. Manage your info, privacy, and security.</p>
+</header>
+<nav aria-label="Account">
+<!-- Regression (PR 3 run 1): the live myaccount.google.com avatar exposes
+     the accessible name through its visible text, not an aria-label.
+     Mirrors the observed shape: "Google Account: Name (email)". -->
+<button type="button" role="button">
+  <span>Google Account: Oree Notetaker (oree@example.com)</span>
+</button>
+</nav>
+</body>
+</html>

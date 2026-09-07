@@ -105,12 +105,20 @@ def account_display_name(page: Page, timeout_ms: int = 0) -> str | None:
     """The signed-in account's display name, or None when not determinable.
 
     Reads the same avatar control the session gate verified; call it only
-    after a positive session check. ``timeout_ms=0`` means a single pass.
+    after a positive session check. The accessible name may live in an
+    ``aria-label`` or in the control's inner text (the live
+    myaccount.google.com avatar uses text — same precedence as
+    ``states._locator_detail``). ``timeout_ms=0`` means a single pass.
     """
     avatar = selectors.signed_in_indicator(page, timeout_ms=timeout_ms)
     if avatar is None:
         return None
     label = avatar.get_attribute("aria-label") or ""
+    if not label:
+        try:
+            label = avatar.inner_text()
+        except Exception:
+            label = ""
     match = _GOOGLE_ACCOUNT_LABEL.search(label)
     if match is None:
         return None
