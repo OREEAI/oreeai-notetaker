@@ -4,10 +4,10 @@ from typing import Annotated
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from oreeai_nt.core.cache import CacheService
-from oreeai_nt.db.session import get_session
-from oreeai_nt.repositories.meeting import MeetingRepository
-from oreeai_nt.services.meeting import MeetingService
+from oreeai_notetaker.core.cache import CacheService
+from oreeai_notetaker.db.session import get_session
+from oreeai_notetaker.repositories.meeting import MeetingRepository
+from oreeai_notetaker.services.meeting import MeetingService
 
 
 async def get_db(

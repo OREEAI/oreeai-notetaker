@@ -1,4 +1,4 @@
-from oreeai_nt.core.cache import CacheService
+from oreeai_notetaker.core.cache import CacheService
 
 
 async def test_cache_disabled_returns_none() -> None:

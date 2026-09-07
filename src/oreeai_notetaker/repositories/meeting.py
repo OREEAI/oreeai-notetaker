@@ -4,8 +4,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import load_only
 
-from oreeai_nt.models.meeting import Meeting
-from oreeai_nt.repositories.base import BaseRepository
+from oreeai_notetaker.models.meeting import Meeting
+from oreeai_notetaker.repositories.base import BaseRepository
 
 _LIST_COLUMNS = (
     Meeting.id,

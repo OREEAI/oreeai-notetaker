@@ -5,7 +5,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from oreeai_nt.db.base import Base
+from oreeai_notetaker.db.base import Base
 
 
 class BaseRepository[ModelType: Base]:

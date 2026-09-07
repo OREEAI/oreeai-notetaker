@@ -1,12 +1,17 @@
 import uuid
 from datetime import datetime
 
-from oreeai_nt.core.cache import CacheService
-from oreeai_nt.core.exceptions import ConflictError, NotFoundError
-from oreeai_nt.enums import MeetingStatus
-from oreeai_nt.models.meeting import Meeting
-from oreeai_nt.repositories.meeting import MeetingRepository
-from oreeai_nt.schemas.meeting import MeetingCreate, MeetingListItem, MeetingRead, MeetingUpdate
+from oreeai_notetaker.core.cache import CacheService
+from oreeai_notetaker.core.exceptions import ConflictError, NotFoundError
+from oreeai_notetaker.enums import MeetingStatus
+from oreeai_notetaker.models.meeting import Meeting
+from oreeai_notetaker.repositories.meeting import MeetingRepository
+from oreeai_notetaker.schemas.meeting import (
+    MeetingCreate,
+    MeetingListItem,
+    MeetingRead,
+    MeetingUpdate,
+)
 
 
 class MeetingService:

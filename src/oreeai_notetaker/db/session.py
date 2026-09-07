@@ -3,7 +3,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from oreeai_nt.core.config import settings
+from oreeai_notetaker.core.config import settings
 
 engine_kwargs: dict[str, Any] = {"echo": settings.db_echo, "pool_pre_ping": True}
 if settings.database_url.startswith("postgresql"):

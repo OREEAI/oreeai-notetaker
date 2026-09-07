@@ -2,10 +2,10 @@ import uuid
 
 import pytest
 
-from oreeai_nt.core.exceptions import ConflictError, NotFoundError
-from oreeai_nt.repositories.meeting import MeetingRepository
-from oreeai_nt.schemas.meeting import MeetingCreate, MeetingUpdate
-from oreeai_nt.services.meeting import MeetingService
+from oreeai_notetaker.core.exceptions import ConflictError, NotFoundError
+from oreeai_notetaker.repositories.meeting import MeetingRepository
+from oreeai_notetaker.schemas.meeting import MeetingCreate, MeetingUpdate
+from oreeai_notetaker.services.meeting import MeetingService
 
 
 @pytest.fixture

@@ -7,12 +7,12 @@ from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
-from oreeai_nt.api.v1.router import api_router
-from oreeai_nt.core.cache import CacheService
-from oreeai_nt.core.config import settings
-from oreeai_nt.core.exceptions import AppError
-from oreeai_nt.core.logging import setup_logging
-from oreeai_nt.db.session import engine
+from oreeai_notetaker.api.v1.router import api_router
+from oreeai_notetaker.core.cache import CacheService
+from oreeai_notetaker.core.config import settings
+from oreeai_notetaker.core.exceptions import AppError
+from oreeai_notetaker.core.logging import setup_logging
+from oreeai_notetaker.db.session import engine
 
 
 @asynccontextmanager

@@ -36,7 +36,7 @@ services:
       - "8000:8000"
     volumes:
       - ./src:/app/src
-    command: ["uvicorn", "oreeai_nt.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    command: ["uvicorn", "oreeai_notetaker.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     depends_on:
       db:
         condition: service_healthy

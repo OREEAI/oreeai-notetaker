@@ -17,7 +17,7 @@ setup:
 	$(UV) sync
 
 dev:
-	$(UV) run uvicorn oreeai_nt.main:app --reload --port 8000
+	$(UV) run uvicorn oreeai_notetaker.main:app --reload --port 8000
 
 test:
 	$(UV) run pytest

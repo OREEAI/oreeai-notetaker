@@ -47,7 +47,7 @@ See [AGENTS.md](AGENTS.md) for architecture, conventions, and how to add feature
 ## Layout
 
 ```
-src/oreeai_nt/
+src/oreeai_notetaker/
 ├── api/            # routers + dependency injection (views)
 ├── services/       # business logic
 ├── repositories/   # data access

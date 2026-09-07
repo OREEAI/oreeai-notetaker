@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from oreeai_nt.enums import MeetingPlatform, MeetingStatus
+from oreeai_notetaker.enums import MeetingPlatform, MeetingStatus
 
 
 class UTCDatetimeModel(BaseModel):

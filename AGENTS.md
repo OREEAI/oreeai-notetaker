@@ -8,7 +8,7 @@ AI note taker for Google Meet and Zoom meetings. FastAPI + Postgres + Redis, man
 
 - **Python**: 3.13 (pinned in `pyproject.toml`)
 - **Package manager**: `uv` — never use pip directly; always commit `uv.lock` changes
-- **Source layout**: `src/oreeai_nt/` (installed as editable package by `uv sync`)
+- **Source layout**: `src/oreeai_notetaker/` (installed as editable package by `uv sync`)
 
 ## Commands
 
@@ -83,7 +83,7 @@ Use the existing Meetings feature (`models/meeting.py` → `api/v1/meetings.py`)
 
 ## Bot (`bot/`)
 
-- `bot/` is a **separate deployable**, not part of the `oreeai_nt` Python package. It must never import `src/oreeai_nt`, and the service must never import `bot/`. The only contract between them is the container boundary and the bot's exit-code table (see `bot/README.md` and the Shared contracts in `plans/note-taker-prs.md`).
+- `bot/` is a **separate deployable**, not part of the `oreeai_notetaker` Python package. It must never import `src/oreeai_notetaker`, and the service must never import `bot/`. The only contract between them is the container boundary and the bot's exit-code table (see `bot/README.md` and the Shared contracts in `plans/note-taker-prs.md`).
 - Bot code uses the **sync Playwright API** (it's a standalone process; async buys nothing here).
 - All Meet DOM selectors live in `bot/selectors.py` (aria-label/role based, `en-US` locale forced). A Meet UI change should be a one-file fix, not a hunt through call sites.
 - Bot scripts are held to the same ruff + mypy standards as `src/` (PR 1 extends `tool.mypy.files` to include `bot/`).

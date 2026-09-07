@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from oreeai_nt.api.v1 import health, meetings
+from oreeai_notetaker.api.v1 import health, meetings
 
 api_router = APIRouter()
 api_router.include_router(health.router, tags=["health"])

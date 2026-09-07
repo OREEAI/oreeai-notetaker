@@ -9,7 +9,7 @@ silent-capture detection explicit and testable; PR 3 makes the bot a
 **visibly consenting recorder** (fixed name + in-call chat announcement)
 that refuses to start without an explicit `CONSENT_ACK`.
 
-The bot is a **separate deployable**. It must never import `oreeai_nt`, and
+The bot is a **separate deployable**. It must never import `oreeai_notetaker`, and
 the service must never import `bot/`. The only contract between them is the
 container boundary and the exit-code table below.
 
