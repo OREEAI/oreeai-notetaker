@@ -11,6 +11,7 @@ chmod 700 "$XDG_RUNTIME_DIR"
 
 pulseaudio --start --exit-idle-time=-1 --disable-shm
 pactl load-module module-null-sink sink_name=virtual_speaker >/dev/null
+pactl load-module module-null-sink sink_name=silent_sink sink_properties=device.description=Silent_Test_Sink >/dev/null
 pactl load-module module-remap-source master=virtual_speaker.monitor source_name=virtual_mic source_properties=device.description=Virtual_Microphone >/dev/null
 pactl load-module module-native-protocol-unix socket=/run/pulse/native >/dev/null
 pactl set-default-sink virtual_speaker >/dev/null

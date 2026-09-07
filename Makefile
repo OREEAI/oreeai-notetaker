@@ -56,6 +56,8 @@ bot-run: bot-build
 	docker run --rm --init --shm-size=1g --name oreeai-bot-spike \
 		$(GPU_FLAGS) \
 		-e MEETING_URL -e BOT_NAME -e CONSENT_ACK -e CALL_ID -e LOG_LEVEL -e TZ=$(TZ) -e DEBUG_DIR=/debug \
+		-e BOT_WAITING_ROOM_TIMEOUT -e BOT_EMPTY_ROOM_TIMEOUT -e BOT_ALONE_GRACE -e BOT_MAX_RECORD_DURATION \
+		-e BOT_SILENCE_RMS_FLOOR -e PAREC_DEVICE \
 		-v $(CURDIR)/bot/audio:/audio \
 		-v $(CURDIR)/bot/debug:/debug \
 		oreeai-bot:local
