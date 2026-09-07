@@ -1,9 +1,11 @@
-# OreeAI Meet bot (PR 1 — spike)
+# OreeAI Meet bot (PR 2 — join lifecycle)
 
-A container that joins a real Google Meet call as a guest and records the
-meeting audio to a WAV file. This spike is the **go/no-go gate** for the
-whole self-hosting approach: if the bot can't hear a real Meet call, stop
-and reassess.
+A container that joins a real Google Meet call as a guest, tracks the call
+through every real-world lifecycle state, records meeting audio to a WAV
+file, and leaves cleanly on every exit path. PR 1 proved the bot can join
+and capture audible audio; this lifecycle layer makes waiting rooms, late
+admission, removals, empty rooms, alone grace, maximum recording duration,
+and silent-capture detection explicit and testable.
 
 The bot is a **separate deployable**. It must never import `oreeai_nt`, and
 the service must never import `bot/`. The only contract between them is the
@@ -14,6 +16,12 @@ container boundary and the exit-code table below.
 ```bash
 make bot-build
 make bot-run MEETING_URL=https://meet.google.com/xxx-xxxx-xxx BOT_NAME=Spike CONSENT_ACK=true
+```
+
+Lifecycle timeouts can be overridden per run without changing the image:
+
+```bash
+make bot-run MEETING_URL=<link> CONSENT_ACK=true CALL_ID=max-cap BOT_MAX_RECORD_DURATION=30
 ```
 
 `make bot-run` creates and mounts `bot/audio` as `/audio` inside the
@@ -51,9 +59,83 @@ or launch-config change, before spending a manual gate run on it.
 | `CALL_ID` | no | `spike` | Names the WAV: `/audio/<CALL_ID>.wav`. The runner later passes the real call id. |
 | `LOG_LEVEL` | no | `INFO` | stdlib level name |
 | `DEBUG_DIR` | no | `/tmp` | Where stall screenshots land. The Makefile sets it to `/debug` (mounted as `bot/debug`) so screenshots survive the `--rm` container. |
+| `BOT_WAITING_ROOM_TIMEOUT` | no | `600` | Seconds waiting for admission before exiting `2` (`never_admitted`). |
+| `BOT_EMPTY_ROOM_TIMEOUT` | no | `300` | Seconds after admission in a confirmed-empty room before exiting `4`. The same deadline applies when participant detection remains unavailable; that path exits `5` because the bot cannot verify the room. |
+| `BOT_ALONE_GRACE` | no | `60` | Seconds the bot remains after all other participants leave a previously active call before leaving with exit `0` and `end_reason=alone`. |
+| `BOT_MAX_RECORD_DURATION` | no | `10800` | Maximum recording seconds before the bot leaves with exit `0` and `end_reason=give_up`. |
+| `BOT_SILENCE_RMS_FLOOR` | no | `50` | Whole-WAV RMS floor in raw 16-bit units. A clean exit with a finished recording below this floor exits `7` (`silent_recording`). |
+| `PAREC_DEVICE` | no | `virtual_speaker.monitor` | Diagnostic PulseAudio-device override for `parec`. Pointing it at `silent_sink.monitor` exercises the silence path with a live recorder and a silent source. |
 
 The container runs as uid `1000`. If your host uid differs, make the audio
 mount writable: `chmod 777 bot/audio` (the Makefile target does this for you).
+
+## Join lifecycle
+
+`bot/join_meet.py` performs the humanized pre-join flow and owns browser
+startup/shutdown, the recorder, the silence check, and the process exit code.
+`bot/states.py` contains side-effect-free DOM predicates. Each predicate takes
+a page and an optional selector set defaulting to `bot/selectors.py`.
+ `bot/listeners.py`
+polls about every two seconds, logs transitions, starts/stops recording, and
+clicks Leave on the terminal paths that need a clean departure.
+
+```text
+join_clicked
+  -> waiting_room
+    -> in_call (admitted; recorder starts)
+      -> call_ended (exit 0)
+      -> removed (exit 3)
+      -> alone (exit 0 after BOT_ALONE_GRACE)
+      -> give_up (exit 0 after BOT_MAX_RECORD_DURATION)
+      -> empty_room (exit 4 after BOT_EMPTY_ROOM_TIMEOUT)
+      -> bot_error (exit 5: recorder died or room stayed undetectable)
+    -> never_admitted (exit 2 after BOT_WAITING_ROOM_TIMEOUT)
+    -> blocked (exit 5: Meet served the anti-bot wall)
+```
+
+Admission into a room that never had another participant is the empty-room
+case, not the alone case. The alone path requires the bot to have seen at
+least two participants before everyone else leaves. A denied knock has no
+distinct Meet screen, so it remains in the waiting room until the 600-second
+deadline and exits `2`.
+
+Participant counts include the bot. Meet does not always put the number in
+the participants control's accessible name, so the bot also reads the visible
+count badge and treats Meet's "only one here" text as corroboration. An
+unknown count is never treated as an empty room.
+
+## Exit codes
+
+| Code | Meaning | Runner outcome |
+|---|---|---|
+| 0 | Clean end: host ended the call, bot left after alone grace, bot reached the maximum recording duration, or an operator stopped the container | `done`; `end_reason` is `call_ended`, `alone`, `give_up`, or `null` for an operator stop |
+| 2 | Never admitted after `BOT_WAITING_ROOM_TIMEOUT` | `failed`, `failure_reason=never_admitted` |
+| 3 | Removed mid-call | `done`, `end_reason=removed` |
+| 4 | Lifecycle timeout: waiting in an unstarted/empty room after admission | `failed`; the runner reports `join_timeout` when the bot never recorded and `no_show` when it recorded an empty room |
+| 5 | Unexpected bot error: pre-join failure, blocked join attempt, dead recorder, or unavailable room detection | `failed`, `failure_reason=bot_error:<detail>` |
+| 6 | Consent refused | Reserved for PR 3 |
+| 7 | A finished clean recording is below `BOT_SILENCE_RMS_FLOOR` | `failed`, `failure_reason=silent_recording` |
+
+The bot also emits one machine-readable terminal line for the future runner:
+
+```text
+OREEAI_BOT_RESULT {"call_id": "<uuid>", "end_reason": "alone", "exit_code": 0}
+```
+
+## Silence check
+
+On every clean exit with a finished recording, the bot measures RMS over the
+entire WAV with the standard library and compares it to
+`BOT_SILENCE_RMS_FLOOR`. The default floor is intentionally low: real speech,
+even soft speech in a short meeting, measures far above it. Only an
+effectively silent capture—such as a broken PulseAudio graph—falls below it.
+
+To exercise exit `7` without breaking the operational audio graph, run with a
+live recorder pointed at the container's always-silent diagnostic sink:
+
+```bash
+make bot-run MEETING_URL=<link> CONSENT_ACK=true CALL_ID=silence PAREC_DEVICE=silent_sink.monitor
+```
 
 ## Audio format (pinned — never changes)
 
@@ -158,8 +240,9 @@ as a non-root user without `SYS_ADMIN`.
 Every Meet DOM selector lives in `bot/selectors.py` (aria-label / role
 based, `en-US` forced). A Meet UI change must be a one-file fix. When state
 detection stalls, the bot saves a debug screenshot to
-`$DEBUG_DIR/oreeai-debug-<ts>.png` (`bot/debug/` in spike runs) and logs a
-warning with the page URL and a snippet of visible page text.
+`$DEBUG_DIR/oreeai-debug-<ts>.png` (`bot/debug/` in local runs) and logs a
+warning with the page URL and a snippet of visible page text. Lifecycle
+selectors include the participant-count control and Meet's alone-room text.
 
 `bot/selectors.py` is imported only as part of the `bot` package
 (`python -m bot.join_meet`): a flat script import from inside `bot/` would
@@ -167,43 +250,37 @@ shadow Python's stdlib `selectors` module, which Playwright/asyncio need.
 
 ## Logging
 
-stdlib `logging`, logger `oreeai.bot` (and `oreeai.bot.record`). Every state
-transition is logged. Audio bytes are never logged, and recording paths are
-never logged with identifiers.
+stdlib `logging`, logger `oreeai.bot` (plus `oreeai.bot.record`,
+`oreeai.bot.states`, and `oreeai.bot.result`). Every lifecycle transition is
+logged as:
 
-## Exit codes
+```text
+call_id=<id> from_state=<previous> to_state=<next> reason=<why>
+```
 
-| Code | Meaning | Notes |
-|---|---|---|
-| 0 | Clean end (call ended or graceful SIGTERM/stop) | |
-| 2 | Never admitted (waiting-room timeout, 600 s in the spike) | |
-| 5 | Unexpected bot error (Playwright crash, exception, capture failure, the meeting blocks anonymous guests, or Meet blocks the join attempt — see Gate criteria) | |
+The terminal machine-readable line is:
 
-The full contract table (3 removed, 4 timeouts, 6 consent refused, 7 silent
-recording) is wired in PR 2.
+```text
+OREEAI_BOT_RESULT {"call_id": "<id>", "end_reason": "<reason>", "exit_code": 0}
+```
 
-## Gate criteria (definition of done)
+Audio bytes are never logged. Recording paths are never logged with
+identifiers; the silence check reports only numeric RMS and floor values.
 
-A container started with a Meet URL produces a WAV that contains your
-voice, recorded off a real Meet call you joined from a second device:
+## Manual lifecycle expectations
 
-1. Host a call from device A, grab the guest link. In the meeting's host
-   controls, make sure **Quick access is ON** — otherwise the bot hits
-   Meet's "You can't join this video call" block screen. Sanity check:
-   open the link in an incognito window; you must see the pre-join screen
-   (name field + "Ask to join"), not an error.
-2. `make bot-run MEETING_URL=<link> BOT_NAME=Spike CONSENT_ACK=true`
-3. `Spike` appears in the participant list on device A.
-4. Talk for ~20 s, stop the bot.
-5. `ffprobe` confirms 16 kHz / mono / 16-bit PCM.
-6. Play the WAV — **your voice must be clearly audible.**
-7. Logs show the state transitions (join → admitted → recording → ended)
-   and no audio bytes or recording paths with identifiers.
+The real-Meet scenarios exercise the happy path, late admission, never
+admitted, host never starts, removal, empty room, maximum duration, and
+silence detection. For every run, check that the first log line's
+`image_sha=` matches the commit under test, then compare the logged
+transitions, final `OREEAI_BOT_RESULT` line, container exit code, and—where a
+recording should exist—the WAV format and size.
 
 If the meeting blocks anonymous guests, the bot fails fast (~4 s) with
 "meeting blocks anonymous guests — host must enable Quick access" and a
 screenshot in `bot/debug/`. That is a host-settings problem, not a bot
 problem — a human in an incognito window would hit the same screen.
 
-If the WAV is silent, one of the trap flags above was lost — debug before
-proceeding. This gate is the whole point of the PR.
+If an operational WAV is silent, one of the trap flags above was lost—debug
+before proceeding. A deliberately silent diagnostic source should exit `7`;
+an operational silent WAV is a failure of the audio graph.

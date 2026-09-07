@@ -1,10 +1,11 @@
 """Join a Google Meet call as a guest and record its audio to a WAV file.
 
-PR 1 spike entry point — happy path plus a clean, graceful stop. The full
-state machine (waiting room, removals, empty room, hard caps) lands in
-PR 2; `bot/states.py` will absorb the state detection this file
-currently inlines. Exit codes already follow the Shared contracts table:
-0 clean end, 2 never admitted, 5 unexpected bot error.
+PR 2 lifecycle entry point: waiting room, late admission, never admitted,
+removals, empty rooms, alone grace, maximum recording duration, and clean
+shutdown. DOM predicates live in :mod:`bot.states`; polling, timing, state
+transitions, and recorder triggers live in :mod:`bot.listeners`. Exit codes
+follow the Shared contracts table, including 3 for removal, 4 for lifecycle
+timeouts, and 7 when a clean recording is silent.
 
 Launches branded Google Chrome (channel="chrome"): Meet's server-side
 anti-bot check detects Playwright's bundled Chromium build at join time.
@@ -16,17 +17,32 @@ anti-bot check detects Playwright's bundled Chromium build at join time.
     CALL_ID       WAV file name, default "spike" (runner passes the real id)
     LOG_LEVEL     stdlib level name, default INFO
     DEBUG_DIR     where to write /tmp/oreeai-debug-<ts>.png on state stall;
-                  default /tmp (which the spike sets to /debug via Makefile
+                  default /tmp (which local runs set to /debug via Makefile
                   so the screenshot survives the --rm container)
+    BOT_WAITING_ROOM_TIMEOUT
+                  seconds waiting for admission before exit 2, default 600
+    BOT_EMPTY_ROOM_TIMEOUT
+                  seconds in an empty or undetectable room before exit 4/5,
+                  default 300
+    BOT_ALONE_GRACE
+                  seconds to remain after other participants leave before a
+                  clean exit 0, default 60
+    BOT_MAX_RECORD_DURATION
+                  maximum recording seconds before a clean exit 0, default 10800
+    BOT_SILENCE_RMS_FLOOR
+                  whole-WAV RMS floor, in raw 16-bit units, default 50
+    PAREC_DEVICE  diagnostic PulseAudio-device override for parec; default is
+                  the operational virtual-speaker monitor
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import math
 import os
 import signal
 import sys
-import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -40,29 +56,28 @@ from bot.humanize import (
     pause_between_actions,
     type_text,
 )
-from bot.record_audio import Recorder
+from bot.listeners import (
+    EXIT_BOT_ERROR,
+    EXIT_OK,
+    EXIT_SILENT_RECORDING,
+    BotOutcome,
+    Timeouts,
+    debug_screenshot,
+    run_call_loop,
+)
+from bot.record_audio import Recorder, check_recording
 from bot.stealth import apply_stealth
 
 if TYPE_CHECKING:
     from playwright.sync_api import Locator
 
 logger = logging.getLogger("oreeai.bot")
+result_logger = logging.getLogger("oreeai.bot.result")
 
-EXIT_OK = 0
-EXIT_NEVER_ADMITTED = 2
-EXIT_BOT_ERROR = 5
-
-POLL_INTERVAL_S = 2.0
 JOIN_BUTTON_TIMEOUT_S = 30.0
-ADMIT_TIMEOUT_S = 600.0
-ENDED_CONFIRMATION_POLLS = 3
 MEDIA_MUTE_TIMEOUT_MS = 5000
 GOTO_TIMEOUT_MS = 60000
-DEBUG_SCREENSHOT_NAME = "oreeai-debug"
-_TEXT_SNIPPET_CHARS = 300
 JOIN_BLOCK_CHECK_TIMEOUT_MS = 4000
-FIRST_ADMISSION_EVIDENCE_S = 5.0
-ADMISSION_EVIDENCE_INTERVAL_S = 30.0
 
 # Branded Google Chrome: Meet's server-side anti-bot check detects Playwright's
 # bundled Chromium build at join time. The shared `launch_browser()` helper
@@ -145,29 +160,6 @@ class _Stop:
         return self._requested
 
 
-def _debug_screenshot(page: Page, reason: str) -> None:
-    debug_dir = os.environ.get("DEBUG_DIR", "/tmp")
-    ts = time.strftime("%Y%m%d-%H%M%S")
-    path = f"{debug_dir.rstrip('/')}/{DEBUG_SCREENSHOT_NAME}-{ts}.png"
-    try:
-        page.screenshot(path=path)
-    except Exception:
-        logger.exception("failed to save debug screenshot (%s)", reason)
-        return
-    try:
-        body_text = page.evaluate("() => document.body && document.body.innerText || ''") or ""
-    except Exception:
-        body_text = ""
-    snippet = " ".join(body_text.split())[:_TEXT_SNIPPET_CHARS]
-    logger.warning(
-        "state detection stalled (%s); url=%s; saved %s; text=%r",
-        reason,
-        page.url,
-        path,
-        snippet,
-    )
-
-
 def _mute_media(
     page: Page,
     toggle: Callable[..., Locator | None],
@@ -198,16 +190,51 @@ def _mute_media(
     return True
 
 
-def _join_and_record(page: Page, meeting_url: str, bot_name: str, call_id: str, stop: _Stop) -> int:
+def _env_float(name: str, default: float, *, maximum: float | None = None) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning("invalid %s %r; using default %s", name, raw, default)
+        return default
+    if not math.isfinite(value) or value <= 0 or (maximum is not None and value > maximum):
+        logger.warning("out-of-range %s %r; using default %s", name, raw, default)
+        return default
+    return value
+
+
+def _timeouts_from_env() -> Timeouts:
+    return Timeouts(
+        waiting_room_s=_env_float("BOT_WAITING_ROOM_TIMEOUT", 600.0),
+        empty_room_s=_env_float("BOT_EMPTY_ROOM_TIMEOUT", 300.0),
+        alone_grace_s=_env_float("BOT_ALONE_GRACE", 60.0),
+        max_record_s=_env_float("BOT_MAX_RECORD_DURATION", 10800.0),
+    )
+
+
+def _silence_floor_from_env() -> float:
+    return _env_float("BOT_SILENCE_RMS_FLOOR", 50.0, maximum=32767.0)
+
+
+def _wav_path(call_id: str) -> str:
+    return f"/audio/{call_id}.wav"
+
+
+def _join_and_record(
+    page: Page, meeting_url: str, bot_name: str, call_id: str, stop: _Stop
+) -> tuple[BotOutcome, Recorder]:
     logger.info("navigating to meeting")
+    recorder = Recorder(_wav_path(call_id))
     page.goto(meeting_url, timeout=GOTO_TIMEOUT_MS, wait_until="domcontentloaded")
 
     if selectors.join_blocked_indicator(page, timeout_ms=JOIN_BLOCK_CHECK_TIMEOUT_MS) is not None:
-        _debug_screenshot(page, "meeting blocks anonymous guests (host quick access off)")
+        debug_screenshot(page, "meeting blocks anonymous guests (host quick access off)")
         logger.error(
             "meeting blocks anonymous guests - host must enable Quick access in host controls"
         )
-        return EXIT_BOT_ERROR
+        return BotOutcome(EXIT_BOT_ERROR, None, "meeting blocks anonymous guests"), recorder
 
     dwell_before_start(page)
     name_field = selectors.name_input(page, timeout_ms=MEDIA_MUTE_TIMEOUT_MS)
@@ -219,16 +246,16 @@ def _join_and_record(page: Page, meeting_url: str, bot_name: str, call_id: str, 
 
     pause_between_actions(page)
     if not _mute_media(page, selectors.microphone_toggle, "microphone", required=True):
-        _debug_screenshot(page, "microphone toggle not found")
-        return EXIT_BOT_ERROR
+        debug_screenshot(page, "microphone toggle not found")
+        return BotOutcome(EXIT_BOT_ERROR, None, "microphone toggle not found"), recorder
     pause_between_actions(page)
     _mute_media(page, selectors.camera_toggle, "camera")
 
     join = selectors.join_button(page, timeout_ms=int(JOIN_BUTTON_TIMEOUT_S * 1000))
     if join is None:
-        _debug_screenshot(page, "join button never appeared")
+        debug_screenshot(page, "join button never appeared")
         logger.error("could not find a way to join the meeting")
-        return EXIT_BOT_ERROR
+        return BotOutcome(EXIT_BOT_ERROR, None, "join control never appeared"), recorder
     knocking = (join.get_attribute("aria-label") or "").lower().startswith("ask")
     pause_between_actions(page)
     move_to(page, join)
@@ -237,57 +264,23 @@ def _join_and_record(page: Page, meeting_url: str, bot_name: str, call_id: str, 
     if knocking:
         logger.info("waiting to be admitted")
 
-    deadline = time.monotonic() + ADMIT_TIMEOUT_S
-    next_evidence = time.monotonic() + FIRST_ADMISSION_EVIDENCE_S
-    admitted = False
-    while not stop.requested:
-        now = time.monotonic()
-        if selectors.leave_call_button(page, timeout_ms=0) is not None:
-            logger.info("admitted to the call")
-            admitted = True
-            break
-        if selectors.join_blocked_indicator(page, timeout_ms=0) is not None:
-            _debug_screenshot(page, "meet blocked the join attempt")
-            logger.error("meet blocked the join attempt (anti-bot wall)")
-            return EXIT_BOT_ERROR
-        if now >= next_evidence:
-            _debug_screenshot(page, "waiting for admission (periodic evidence)")
-            next_evidence = now + ADMISSION_EVIDENCE_INTERVAL_S
-        if selectors.knocking_indicator(page, timeout_ms=0) is not None:
-            logger.info("still knocking (host has not admitted the bot yet)")
-        if now >= deadline:
-            _debug_screenshot(page, "never admitted")
-            logger.error("not admitted within %s seconds", ADMIT_TIMEOUT_S)
-            return EXIT_NEVER_ADMITTED
-        page.wait_for_timeout(int(POLL_INTERVAL_S * 1000))
-    if not admitted:
-        logger.info("stop requested before admission; leaving without recording")
-        return EXIT_OK
-
-    recorder = Recorder(f"/audio/{call_id}.wav")
-    recorder.start()
-    logger.info("recording started")
     try:
-        missed = 0
-        while not stop.requested:
-            page.wait_for_timeout(int(POLL_INTERVAL_S * 1000))
-            if not recorder.is_running():
-                logger.error("parec died mid-recording; leaving with a truncated WAV")
-                return EXIT_BOT_ERROR
-            if selectors.leave_call_button(page, timeout_ms=0) is not None:
-                missed = 0
-                continue
-            missed += 1
-            if selectors.call_ended_indicator(page, timeout_ms=500) is not None:
-                logger.info("call ended")
-                break
-            if missed >= ENDED_CONFIRMATION_POLLS:
-                logger.info("in-call indicators gone for %s polls; treating as call ended", missed)
-                break
-    finally:
-        recorder.stop()
-        logger.info("recording stopped")
-    return EXIT_OK
+        outcome = run_call_loop(
+            page,
+            call_id=call_id,
+            recorder=recorder,
+            timeouts=_timeouts_from_env(),
+            stop_requested=lambda: stop.requested,
+        )
+        return outcome, recorder
+    except Exception:
+        if recorder.is_running():
+            try:
+                recorder.stop()
+                logger.info("recording stopped")
+            except Exception:
+                logger.exception("failed to stop recorder during error handling")
+        raise
 
 
 def launch_browser(playwright: Playwright) -> Browser:
@@ -304,7 +297,7 @@ def launch_browser(playwright: Playwright) -> Browser:
     )
 
 
-def _run(meeting_url: str, bot_name: str, call_id: str, stop: _Stop) -> int:
+def _run(meeting_url: str, bot_name: str, call_id: str, stop: _Stop) -> BotOutcome:
     with sync_playwright() as playwright:
         browser = launch_browser(playwright)
         context: BrowserContext = browser.new_context(
@@ -316,10 +309,40 @@ def _run(meeting_url: str, bot_name: str, call_id: str, stop: _Stop) -> int:
         apply_stealth(context)
         try:
             page: Page = context.new_page()
-            return _join_and_record(page, meeting_url, bot_name, call_id, stop)
+            outcome, _ = _join_and_record(page, meeting_url, bot_name, call_id, stop)
+            return outcome
         finally:
             context.close()
             browser.close()
+
+
+def _finalize_recording(outcome: BotOutcome, wav_path: str, silence_floor: float) -> int:
+    """Apply the post-recording silence check to an otherwise clean exit."""
+    if outcome.exit_code != EXIT_OK or not outcome.recording_started:
+        return outcome.exit_code
+
+    check = check_recording(wav_path, silence_floor)
+    if check.status == "ok":
+        return EXIT_OK
+    if check.status == "silent":
+        logger.error(
+            "recording below silence floor: rms=%.1f floor=%.1f",
+            check.rms or 0.0,
+            silence_floor,
+        )
+        return EXIT_SILENT_RECORDING
+    logger.error("cannot verify finished recording: %s", check.detail)
+    return EXIT_BOT_ERROR
+
+
+def _emit_result(call_id: str, outcome: BotOutcome | None, exit_code: int) -> None:
+    """Emit the machine-readable terminal line consumed by the future runner."""
+    payload = {
+        "call_id": call_id,
+        "end_reason": outcome.end_reason if outcome is not None else None,
+        "exit_code": exit_code,
+    }
+    result_logger.info("OREEAI_BOT_RESULT %s", json.dumps(payload, sort_keys=True))
 
 
 def main() -> int:
@@ -331,9 +354,10 @@ def main() -> int:
 
     if not meeting_url:
         logger.error("MEETING_URL is required")
+        _emit_result(call_id, None, EXIT_BOT_ERROR)
         return EXIT_BOT_ERROR
     logger.info(
-        "oreeai bot spike starting: name=%s call_id=%s consent_ack=%s image_sha=%s",
+        "oreeai bot starting: name=%s call_id=%s consent_ack=%s image_sha=%s",
         bot_name,
         call_id,
         consent_ack,
@@ -352,11 +376,23 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _on_signal)
     signal.signal(signal.SIGINT, _on_signal)
 
+    silence_floor = _silence_floor_from_env()
+    outcome: BotOutcome | None = None
+    exit_code = EXIT_BOT_ERROR
     try:
-        return _run(meeting_url, bot_name, call_id, stop)
+        outcome = _run(meeting_url, bot_name, call_id, stop)
+        exit_code = _finalize_recording(outcome, _wav_path(call_id), silence_floor)
     except Exception:
         logger.exception("unexpected bot error")
-        return EXIT_BOT_ERROR
+        exit_code = EXIT_BOT_ERROR
+    _emit_result(call_id, outcome, exit_code)
+    logger.info(
+        "bot finished: exit_code=%s end_reason=%s reason=%s",
+        exit_code,
+        outcome.end_reason if outcome is not None else None,
+        outcome.reason if outcome is not None else "startup failed",
+    )
+    return exit_code
 
 
 if __name__ == "__main__":

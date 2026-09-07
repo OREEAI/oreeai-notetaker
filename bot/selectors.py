@@ -51,6 +51,14 @@ _JOIN_BLOCKED: re.Pattern[str] = re.compile(
     r"you can[\u2019']?t join this video call.*",
     re.IGNORECASE,
 )
+_PARTICIPANTS: tuple[RoleQuery, ...] = (
+    ("button", re.compile(r"people(?: \(\d+\))?.*", re.IGNORECASE)),
+    ("button", re.compile(r"show everyone.*", re.IGNORECASE)),
+)
+_ALONE_HINT: re.Pattern[str] = re.compile(
+    r"you[\u2019']?re the only one here.*|no one else is here.*",
+    re.IGNORECASE,
+)
 
 
 def _role_locators(page: Page, queries: tuple[RoleQuery, ...]) -> list[Locator]:
@@ -108,3 +116,11 @@ def removed_indicator(page: Page, timeout_ms: int = 1000) -> Locator | None:
 
 def join_blocked_indicator(page: Page, timeout_ms: int = 1000) -> Locator | None:
     return _first_visible(page, _text_locators(page, (_JOIN_BLOCKED,)), timeout_ms)
+
+
+def participant_count_button(page: Page, timeout_ms: int = 1000) -> Locator | None:
+    return _first_visible(page, _role_locators(page, _PARTICIPANTS), timeout_ms)
+
+
+def alone_hint(page: Page, timeout_ms: int = 1000) -> Locator | None:
+    return _first_visible(page, _text_locators(page, (_ALONE_HINT,)), timeout_ms)
