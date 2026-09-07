@@ -60,10 +60,13 @@ make bot-login
 
 This builds the image, creates the profile dir, and starts a login
 container: Xvfb + Chrome on the profile + noVNC published on
-**127.0.0.1:7900 only**. Open `http://127.0.0.1:7900` in a browser, sign in
+**127.0.0.1:7900 only**. Open `http://127.0.0.1:7900` in a browser on the
+host, click **Connect**, and sign in
 with the dedicated bot account (complete 2FA), and wait — the script exits 0
 once it detects the session (default 600 s timeout via `BOT_LOGIN_TIMEOUT`).
-Future authenticated runs reuse that session.
+Future authenticated runs reuse that session. Nothing appears on the host
+desktop: the bot's Chrome runs inside the container's virtual display, and
+noVNC is how you see and drive it.
 
 Every authenticated run first verifies the session against
 `myaccount.google.com`. A missing profile or a signed-out session fails fast

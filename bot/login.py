@@ -108,8 +108,9 @@ def main() -> int:
                 page = existing[0] if existing else context.new_page()
                 page.goto(_SIGNIN_URL, timeout=_GOTO_TIMEOUT_MS, wait_until="domcontentloaded")
                 logger.info(
-                    "sign in with the dedicated bot account in the noVNC window, "
-                    "then wait; timeout %s seconds",
+                    "open http://127.0.0.1:7900 in a browser on this host, click "
+                    "Connect, and sign in with the dedicated bot account; "
+                    "timeout %s seconds",
                     timeout_s,
                 )
                 if _wait_for_sign_in(page, timeout_s):
