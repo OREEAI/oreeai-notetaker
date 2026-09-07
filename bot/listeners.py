@@ -14,6 +14,8 @@ Exit codes follow the Shared contracts table:
   ``no_show`` by whether the bot had started recording; the container only
   reports the timeout itself.
 - ``5``: unexpected bot error.
+- ``6``: consent refused. :mod:`bot.join_meet` checks ``CONSENT_ACK`` before
+  any browser work; this loop never returns it.
 - ``7``: silent recording. This code is selected by :mod:`bot.join_meet`
   after the silence check; this loop only returns the preceding clean ``0``.
 """
@@ -42,6 +44,7 @@ EXIT_NEVER_ADMITTED = 2
 EXIT_REMOVED = 3
 EXIT_JOIN_TIMEOUT = 4
 EXIT_BOT_ERROR = 5
+EXIT_CONSENT_MISSING = 6
 EXIT_SILENT_RECORDING = 7
 
 POLL_INTERVAL_S = 2.0
@@ -192,14 +195,21 @@ def run_call_loop(
     timeouts: Timeouts,
     stop_requested: Callable[[], bool],
     poll_interval_s: float = POLL_INTERVAL_S,
+    announce: Callable[[Page], None] | None = None,
 ) -> BotOutcome:
-    """Poll Meet state from join-click through a terminal lifecycle outcome."""
+    """Poll Meet state from join-click through a terminal lifecycle outcome.
+
+    ``announce`` runs exactly once, right after recording starts (the PR 3
+    in-call consent announcement). It is best-effort: an exception is logged
+    and never affects the lifecycle.
+    """
     start = _now()
     phase = _WAITING_ROOM
     _log_transition(call_id, _FROM_JOIN_CLICKED, phase, "join request submitted")
 
     admitted_at = 0.0
     recording_started = False
+    announced = False
     saw_others = False
     alone_since: float | None = None
     unknown_since: float | None = None
@@ -233,6 +243,12 @@ def run_call_loop(
                 unknown_since = now
                 next_unknown_evidence = now + UNKNOWN_ROOM_EVIDENCE_INTERVAL_S
                 logger.info("recording started")
+                if announce is not None and not announced:
+                    announced = True
+                    try:
+                        announce(page)
+                    except Exception:
+                        logger.exception("post-recording announcement failed; continuing")
                 continue
 
             if selectors.join_blocked_indicator(page, timeout_ms=0) is not None:

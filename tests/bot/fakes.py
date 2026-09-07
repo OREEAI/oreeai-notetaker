@@ -86,8 +86,11 @@ class _SnapshotParser(HTMLParser):
 class FakeLocator:
     """A matching-element list with the Playwright accessors selectors use."""
 
-    def __init__(self, elements: list[_Element] | tuple[_Element, ...] = ()) -> None:
+    def __init__(
+        self, elements: list[_Element] | tuple[_Element, ...] = (), page: FakePage | None = None
+    ) -> None:
         self._elements = list(elements)
+        self._page = page
 
     def count(self) -> int:
         return len(self._elements)
@@ -95,11 +98,11 @@ class FakeLocator:
     @property
     def first(self) -> FakeLocator:
         if not self._elements:
-            return FakeLocator(())
+            return FakeLocator((), self._page)
         # Prefer the most specific matching control when an ancestor also
         # contains the same accessible name or visible text.
         best = min(self._elements, key=lambda item: (len(item.text), item.depth))
-        return FakeLocator((best,))
+        return FakeLocator((best,), self._page)
 
     def is_visible(self) -> bool:
         return any(_is_visible(item) for item in self._elements)
@@ -121,13 +124,33 @@ class FakeLocator:
 
     def click(self, **kwargs: object) -> None:
         del kwargs
-        return None
+        if self._page is not None and self._elements:
+            self._page.clicked.append(_accessible_name(self._elements[0]))
+
+    def press(self, key: str) -> None:
+        if self._page is not None:
+            self._page.pressed.append(key)
+
+    def fill(self, value: str) -> None:
+        if self._page is not None:
+            self._page.typed.append(value)
 
 
 class _FakeMouse:
     def move(self, *args: object, **kwargs: object) -> None:
         del args, kwargs
         return None
+
+
+class _FakeKeyboard:
+    """Records typed characters onto the page."""
+
+    def __init__(self, page: FakePage) -> None:
+        self._page = page
+
+    def type(self, char: str, **kwargs: object) -> None:
+        del kwargs
+        self._page.typed.append(char)
 
 
 _SIMPLE_ATTRIBUTE_SELECTOR = re.compile(
@@ -140,7 +163,12 @@ def _matches_attribute(item: _Element, tag: str, attr: str, value: str) -> bool:
 
 
 class FakePage:
-    """Parse one committed fixture and answer selector queries from its DOM."""
+    """Parse one committed fixture and answer selector queries from its DOM.
+
+    ``clicked`` / ``pressed`` / ``typed`` record the interactions the bot
+    performs (via :mod:`bot.humanize`) so tests can assert the consent
+    announcement without a browser.
+    """
 
     def __init__(self, html: str, url: str = "https://meet.google.com/abc-defg-hij") -> None:
         parser = _SnapshotParser()
@@ -148,10 +176,18 @@ class FakePage:
         self._elements = parser.elements
         self.url = url
         self.mouse = _FakeMouse()
+        self.keyboard = _FakeKeyboard(self)
+        self.clicked: list[str] = []
+        self.pressed: list[str] = []
+        self.typed: list[str] = []
 
     @classmethod
     def from_fixture(cls, path: Path) -> FakePage:
         return cls(path.read_text(encoding="utf-8"))
+
+    def typed_text(self) -> str:
+        """Everything typed so far (per-character typing collapses to text)."""
+        return "".join(self.typed)
 
     def wait_for_timeout(self, _timeout_ms: int) -> None:
         return None
@@ -176,18 +212,20 @@ class FakePage:
                     matches.append(element)
             elif _accessible_name(element).casefold() == str(name).casefold():
                 matches.append(element)
-        return FakeLocator(matches)
+        return FakeLocator(matches, self)
 
     def get_by_text(self, text: str | re.Pattern[str]) -> FakeLocator:
         if isinstance(text, re.Pattern):
-            return FakeLocator([item for item in self._elements if text.search(item.text)])
+            return FakeLocator([item for item in self._elements if text.search(item.text)], self)
         wanted = " ".join(str(text).split()).casefold()
-        return FakeLocator([item for item in self._elements if wanted in item.text.casefold()])
+        return FakeLocator(
+            [item for item in self._elements if wanted in item.text.casefold()], self
+        )
 
     def locator(self, selector: str) -> FakeLocator:
         match = _SIMPLE_ATTRIBUTE_SELECTOR.fullmatch(selector.strip())
         if match is None:
-            return FakeLocator(())
+            return FakeLocator((), self)
         wanted_tag = match.group("tag").lower()
         wanted_attr = match.group("attr").lower()
         wanted_value = match.group("value").casefold()
@@ -196,7 +234,8 @@ class FakePage:
                 item
                 for item in self._elements
                 if _matches_attribute(item, wanted_tag, wanted_attr, wanted_value)
-            ]
+            ],
+            self,
         )
 
 

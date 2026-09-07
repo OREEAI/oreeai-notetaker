@@ -3,10 +3,13 @@ UV ?= uv
 # Bot targets honor .env (e.g. BOT_AUTH_MODE) via the passthrough -e flags
 # below. Precedence: command-line assignments win over .env values;
 # inherited shell env loses to .env (unlike compose). Missing .env is fine.
+# CONSENT_ACK lives here too: it can be ambient, but every recording run
+# should still see it consciously (override on the command line to refuse).
 -include .env
 export BOT_AUTH_MODE BOT_PROFILE_DIR BOT_LOGIN_TIMEOUT PAREC_DEVICE
 export BOT_WAITING_ROOM_TIMEOUT BOT_EMPTY_ROOM_TIMEOUT BOT_ALONE_GRACE
 export BOT_MAX_RECORD_DURATION BOT_SILENCE_RMS_FLOOR
+export CONSENT_ACK ENVIRONMENT
 
 .PHONY: setup dev test lint format typecheck makemigrations migrate downgrade docker-up docker-down docker-logs docker-rebuild bot-build bot-run bot-probe clean
 
@@ -63,7 +66,7 @@ bot-run: bot-build
 	mkdir -p bot/audio bot/debug $(BOT_PROFILE) && chmod 777 bot/audio bot/debug && chmod 700 $(BOT_PROFILE)
 	docker run --rm --init --shm-size=1g --name oreeai-bot-spike \
 		$(GPU_FLAGS) \
-		-e MEETING_URL -e BOT_NAME -e CONSENT_ACK -e CALL_ID -e LOG_LEVEL -e TZ=$(TZ) -e DEBUG_DIR=/debug \
+		-e MEETING_URL -e BOT_NAME -e CONSENT_ACK -e ENVIRONMENT -e CALL_ID -e LOG_LEVEL -e TZ=$(TZ) -e DEBUG_DIR=/debug \
 		-e BOT_WAITING_ROOM_TIMEOUT -e BOT_EMPTY_ROOM_TIMEOUT -e BOT_ALONE_GRACE -e BOT_MAX_RECORD_DURATION \
 		-e BOT_SILENCE_RMS_FLOOR -e PAREC_DEVICE -e BOT_AUTH_MODE -e BOT_PROFILE_DIR \
 		-v $(CURDIR)/bot/audio:/audio \

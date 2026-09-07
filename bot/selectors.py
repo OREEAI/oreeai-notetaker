@@ -70,6 +70,19 @@ _SIGNED_IN_AVATAR: RoleQuery = (
     "button",
     re.compile(r"google\s+account\s*:\s*\S", re.IGNORECASE),
 )
+# In-call chat panel (PR 3 consent announcement). The message box carries the
+# "Send a message" accessible name as a textbox; a separate send control (when
+# present) is a button with the same label — the role split disambiguates.
+_CHAT_OPEN: tuple[RoleQuery, ...] = (
+    ("button", re.compile("chat with everyone.*", re.IGNORECASE)),
+    ("button", re.compile("open chat.*", re.IGNORECASE)),
+)
+_CHAT_MESSAGE_BOX: tuple[RoleQuery, ...] = (
+    ("textbox", re.compile("send a message.*", re.IGNORECASE)),
+)
+_CHAT_SEND: tuple[RoleQuery, ...] = (
+    ("button", re.compile(r"send(?: a)? message.*", re.IGNORECASE)),
+)
 
 
 def _role_locators(page: Page, queries: tuple[RoleQuery, ...]) -> list[Locator]:
@@ -139,3 +152,15 @@ def alone_hint(page: Page, timeout_ms: int = 1000) -> Locator | None:
 
 def signed_in_indicator(page: Page, timeout_ms: int = 1000) -> Locator | None:
     return _first_visible(page, _role_locators(page, (_SIGNED_IN_AVATAR,)), timeout_ms)
+
+
+def chat_open_button(page: Page, timeout_ms: int = 1000) -> Locator | None:
+    return _first_visible(page, _role_locators(page, _CHAT_OPEN), timeout_ms)
+
+
+def chat_message_box(page: Page, timeout_ms: int = 1000) -> Locator | None:
+    return _first_visible(page, _role_locators(page, _CHAT_MESSAGE_BOX), timeout_ms)
+
+
+def chat_send_button(page: Page, timeout_ms: int = 1000) -> Locator | None:
+    return _first_visible(page, _role_locators(page, _CHAT_SEND), timeout_ms)
