@@ -3,8 +3,8 @@ from datetime import datetime
 from sqlalchemy import DateTime, Enum, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from oreeai_nt.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
-from oreeai_nt.enums import MeetingPlatform, MeetingStatus
+from oreeai_notetaker.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from oreeai_notetaker.enums import MeetingPlatform, MeetingStatus
 
 
 class Meeting(Base, UUIDPrimaryKeyMixin, TimestampMixin):

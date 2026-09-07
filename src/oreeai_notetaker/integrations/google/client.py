@@ -1,6 +1,6 @@
 from typing import Any
 
-from oreeai_nt.enums import MeetingPlatform
+from oreeai_notetaker.enums import MeetingPlatform
 
 
 class GoogleMeetClient:

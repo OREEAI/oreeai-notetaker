@@ -6,9 +6,9 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-import oreeai_nt.models  # noqa: F401
-from oreeai_nt.core.config import settings
-from oreeai_nt.db.base import Base
+import oreeai_notetaker.models  # noqa: F401
+from oreeai_notetaker.core.config import settings
+from oreeai_notetaker.db.base import Base
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)

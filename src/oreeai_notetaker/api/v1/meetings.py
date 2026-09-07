@@ -2,8 +2,13 @@ import uuid
 
 from fastapi import APIRouter, Query
 
-from oreeai_nt.api.deps import MeetingServiceDep
-from oreeai_nt.schemas.meeting import MeetingCreate, MeetingListItem, MeetingRead, MeetingUpdate
+from oreeai_notetaker.api.deps import MeetingServiceDep
+from oreeai_notetaker.schemas.meeting import (
+    MeetingCreate,
+    MeetingListItem,
+    MeetingRead,
+    MeetingUpdate,
+)
 
 router = APIRouter()
 

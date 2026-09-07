@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from httpx import AsyncClient
 from sqlalchemy.exc import SQLAlchemyError
 
-from oreeai_nt.api.deps import get_db
+from oreeai_notetaker.api.deps import get_db
 
 
 async def test_health_returns_ok(client: AsyncClient) -> None:

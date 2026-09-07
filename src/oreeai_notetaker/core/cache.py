@@ -5,7 +5,7 @@ from typing import Any
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
-from oreeai_nt.core.config import settings
+from oreeai_notetaker.core.config import settings
 
 logger = logging.getLogger(__name__)
 

@@ -6,10 +6,10 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from oreeai_nt.api.deps import get_db
-from oreeai_nt.core.cache import CacheService
-from oreeai_nt.db.base import Base
-from oreeai_nt.main import create_app
+from oreeai_notetaker.api.deps import get_db
+from oreeai_notetaker.core.cache import CacheService
+from oreeai_notetaker.db.base import Base
+from oreeai_notetaker.main import create_app
 
 
 @pytest.fixture
