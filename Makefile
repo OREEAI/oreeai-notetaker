@@ -52,14 +52,33 @@ bot-build:
 GIT_SHA ?= $(shell sha=$$(git rev-parse --short HEAD 2>/dev/null || echo unknown); test -n "$$(git status --porcelain 2>/dev/null)" && sha=$${sha}-dirty; echo $$sha)
 
 bot-run: bot-build
-	mkdir -p bot/audio bot/debug && chmod 777 bot/audio bot/debug
+	mkdir -p bot/audio bot/debug $(BOT_PROFILE) && chmod 777 bot/audio bot/debug && chmod 700 $(BOT_PROFILE)
 	docker run --rm --init --shm-size=1g --name oreeai-bot-spike \
 		$(GPU_FLAGS) \
 		-e MEETING_URL -e BOT_NAME -e CONSENT_ACK -e CALL_ID -e LOG_LEVEL -e TZ=$(TZ) -e DEBUG_DIR=/debug \
 		-e BOT_WAITING_ROOM_TIMEOUT -e BOT_EMPTY_ROOM_TIMEOUT -e BOT_ALONE_GRACE -e BOT_MAX_RECORD_DURATION \
-		-e BOT_SILENCE_RMS_FLOOR -e PAREC_DEVICE \
+		-e BOT_SILENCE_RMS_FLOOR -e PAREC_DEVICE -e BOT_AUTH_MODE -e BOT_PROFILE_DIR \
 		-v $(CURDIR)/bot/audio:/audio \
 		-v $(CURDIR)/bot/debug:/debug \
+		-v $(BOT_PROFILE):/profile \
+		oreeai-bot:local
+
+# Persistent Chrome profile backing authenticated joins. Mounted at /profile
+# inside the container; holds the Google session (credentials), so it is
+# gitignored and never baked into the image. Override per host, e.g.
+# BOT_PROFILE=/var/lib/oreeai/chrome-profile.
+BOT_PROFILE ?= $(CURDIR)/bot/chrome-profile
+
+# One-time interactive sign-in for the persistent profile. noVNC is published
+# on 127.0.0.1:7900 only; open http://127.0.0.1:7900 in a browser and sign in
+# with the dedicated bot account.
+bot-login: bot-build
+	mkdir -p $(BOT_PROFILE) && chmod 700 $(BOT_PROFILE)
+	docker run --rm --init --shm-size=1g --name oreeai-bot-login \
+		$(GPU_FLAGS) \
+		-p 127.0.0.1:7900:7900 \
+		-e BOT_ENTRY_MODE=login -e LOG_LEVEL -e TZ=$(TZ) -e BOT_LOGIN_TIMEOUT -e BOT_PROFILE_DIR \
+		-v $(BOT_PROFILE):/profile \
 		oreeai-bot:local
 
 # Real-GPU passthrough for the WebGL fingerprint; no-op on hosts without /dev/dri.

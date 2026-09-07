@@ -2,6 +2,8 @@
 .venv
 plans
 bot/audio
+bot/debug
+bot/chrome-profile
 **/__pycache__
 **/*.pyc
 .mypy_cache

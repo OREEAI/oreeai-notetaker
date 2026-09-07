@@ -33,6 +33,14 @@ anti-bot check detects Playwright's bundled Chromium build at join time.
                   whole-WAV RMS floor, in raw 16-bit units, default 50
     PAREC_DEVICE  diagnostic PulseAudio-device override for parec; default is
                   the operational virtual-speaker monitor
+    BOT_AUTH_MODE join identity: "anonymous" (guest, default) or
+                  "authenticated" (signed-in Google account via a persistent
+                  Chrome profile). Unknown values warn and fall back to
+                  anonymous.
+    BOT_PROFILE_DIR
+                  container path of the persistent Chrome profile used in
+                  authenticated mode, default /profile (mounted from the
+                  host's bot/chrome-profile by the Makefile)
 """
 
 from __future__ import annotations
@@ -48,7 +56,7 @@ from typing import TYPE_CHECKING
 
 from playwright.sync_api import Browser, BrowserContext, Page, Playwright, sync_playwright
 
-from bot import selectors
+from bot import selectors, states
 from bot.humanize import (
     click_like_human,
     dwell_before_start,
@@ -218,12 +226,65 @@ def _silence_floor_from_env() -> float:
     return _env_float("BOT_SILENCE_RMS_FLOOR", 50.0, maximum=32767.0)
 
 
+AUTH_MODE_ANONYMOUS = "anonymous"
+AUTH_MODE_AUTHENTICATED = "authenticated"
+PROFILE_DIR_DEFAULT = "/profile"
+SESSION_CHECK_URL = "https://myaccount.google.com"
+SESSION_CHECK_TIMEOUT_MS = 15000
+
+
+def parse_auth_mode(raw: str) -> str:
+    """Normalize BOT_AUTH_MODE; unknown values fall back to anonymous."""
+    mode = raw.strip().lower()
+    if mode in ("", AUTH_MODE_ANONYMOUS):
+        return AUTH_MODE_ANONYMOUS
+    if mode == AUTH_MODE_AUTHENTICATED:
+        return AUTH_MODE_AUTHENTICATED
+    logger.warning("unknown BOT_AUTH_MODE %r; using %s", raw, AUTH_MODE_ANONYMOUS)
+    return AUTH_MODE_ANONYMOUS
+
+
+def validate_profile_dir(path: str) -> str | None:
+    """Return an error string when the profile dir is unusable, else None."""
+    if not path:
+        return "profile directory is not configured"
+    if not os.path.isdir(path):
+        return "profile directory is missing (run make bot-login first)"
+    if not os.access(path, os.R_OK | os.W_OK | os.X_OK):
+        return "profile directory is not readable and writable"
+    return None
+
+
 def _wav_path(call_id: str) -> str:
     return f"/audio/{call_id}.wav"
 
 
+def _check_session(page: Page) -> BotOutcome | None:
+    """Verify the persistent profile holds a live Google session.
+
+    Returns an error outcome when the session is missing or invalid, else
+    None. A bad session is a pre-join failure (exit 5); callers keep the
+    detail in the failure reason for the future runner.
+    """
+    try:
+        page.goto(
+            SESSION_CHECK_URL, timeout=SESSION_CHECK_TIMEOUT_MS, wait_until="domcontentloaded"
+        )
+    except Exception:
+        reason = "google session check page failed to load"
+        logger.error("%s", reason)
+        return BotOutcome(EXIT_BOT_ERROR, None, reason)
+    signed_in, detail = states.is_signed_in(page)
+    if signed_in:
+        logger.info("google session active (%s)", detail)
+        return None
+    reason = f"google session invalid: {detail} (run make bot-login to sign in)"
+    logger.error("%s", reason)
+    return BotOutcome(EXIT_BOT_ERROR, None, reason)
+
+
 def _join_and_record(
-    page: Page, meeting_url: str, bot_name: str, call_id: str, stop: _Stop
+    page: Page, meeting_url: str, bot_name: str, call_id: str, stop: _Stop, authenticated: bool
 ) -> tuple[BotOutcome, Recorder]:
     logger.info("navigating to meeting")
     recorder = Recorder(_wav_path(call_id))
@@ -237,13 +298,15 @@ def _join_and_record(
         return BotOutcome(EXIT_BOT_ERROR, None, "meeting blocks anonymous guests"), recorder
 
     dwell_before_start(page)
-    name_field = selectors.name_input(page, timeout_ms=MEDIA_MUTE_TIMEOUT_MS)
-    if name_field is not None:
-        type_text(page, name_field, bot_name)
-        logger.info("display name set: %s", bot_name)
+    if authenticated:
+        logger.info("authenticated mode: joining with the account display name")
     else:
-        logger.warning("name field not found; joining with Meet's default display name")
-
+        name_field = selectors.name_input(page, timeout_ms=MEDIA_MUTE_TIMEOUT_MS)
+        if name_field is not None:
+            type_text(page, name_field, bot_name)
+            logger.info("display name set: %s", bot_name)
+        else:
+            logger.warning("name field not found; joining with Meet's default display name")
     pause_between_actions(page)
     if not _mute_media(page, selectors.microphone_toggle, "microphone", required=True):
         debug_screenshot(page, "microphone toggle not found")
@@ -297,23 +360,74 @@ def launch_browser(playwright: Playwright) -> Browser:
     )
 
 
-def _run(meeting_url: str, bot_name: str, call_id: str, stop: _Stop) -> BotOutcome:
+def _launch_anonymous(playwright: Playwright) -> tuple[Page, Callable[[], None]]:
+    """Launch branded Chrome with a throwaway profile (guest joins)."""
+    browser = launch_browser(playwright)
+    context: BrowserContext = browser.new_context(
+        locale="en-US",
+        permissions=["microphone", "camera"],
+        viewport={"width": 1920, "height": 1080},
+        device_scale_factor=1.25,
+    )
+    apply_stealth(context)
+
+    def _close() -> None:
+        context.close()
+        browser.close()
+
+    return context.new_page(), _close
+
+
+def _launch_authenticated(
+    playwright: Playwright, profile_dir: str
+) -> tuple[Page, Callable[[], None]]:
+    """Launch branded Chrome on the persistent signed-in profile.
+
+    Uses the same channel, flags, ignored defaults, and context options as
+    the anonymous path so the probe's fingerprint stays representative.
+    """
+    context: BrowserContext = playwright.chromium.launch_persistent_context(
+        profile_dir,
+        channel=BROWSER_CHANNEL,
+        headless=False,
+        args=list(_CHROMIUM_ARGS),
+        ignore_default_args=list(_BROWSER_IGNORED_ARGS),
+        locale="en-US",
+        permissions=["microphone", "camera"],
+        viewport={"width": 1920, "height": 1080},
+        device_scale_factor=1.25,
+    )
+    apply_stealth(context)
+
+    def _close() -> None:
+        context.close()
+
+    existing = context.pages
+    return (existing[0] if existing else context.new_page()), _close
+
+
+def _run(
+    meeting_url: str, bot_name: str, call_id: str, stop: _Stop, auth_mode: str, profile_dir: str
+) -> BotOutcome:
     with sync_playwright() as playwright:
-        browser = launch_browser(playwright)
-        context: BrowserContext = browser.new_context(
-            locale="en-US",
-            permissions=["microphone", "camera"],
-            viewport={"width": 1920, "height": 1080},
-            device_scale_factor=1.25,
-        )
-        apply_stealth(context)
+        if auth_mode == AUTH_MODE_AUTHENTICATED:
+            problem = validate_profile_dir(profile_dir)
+            if problem is not None:
+                return BotOutcome(EXIT_BOT_ERROR, None, f"authenticated mode: {problem}")
+            page, close = _launch_authenticated(playwright, profile_dir)
+        else:
+            page, close = _launch_anonymous(playwright)
         try:
-            page: Page = context.new_page()
-            outcome, _ = _join_and_record(page, meeting_url, bot_name, call_id, stop)
+            if auth_mode == AUTH_MODE_AUTHENTICATED:
+                session_error = _check_session(page)
+                if session_error is not None:
+                    return session_error
+            outcome, _ = _join_and_record(
+                page, meeting_url, bot_name, call_id, stop, auth_mode == AUTH_MODE_AUTHENTICATED
+            )
             return outcome
         finally:
-            context.close()
-            browser.close()
+            close()
 
 
 def _finalize_recording(outcome: BotOutcome, wav_path: str, silence_floor: float) -> int:
@@ -351,16 +465,19 @@ def main() -> int:
     bot_name = os.environ.get("BOT_NAME", "Oree Spike")
     consent_ack = os.environ.get("CONSENT_ACK", "").strip().lower() in ("1", "true", "yes")
     call_id = os.environ.get("CALL_ID", "").strip() or "spike"
+    auth_mode = parse_auth_mode(os.environ.get("BOT_AUTH_MODE", ""))
+    profile_dir = os.environ.get("BOT_PROFILE_DIR", "").strip() or PROFILE_DIR_DEFAULT
 
     if not meeting_url:
         logger.error("MEETING_URL is required")
         _emit_result(call_id, None, EXIT_BOT_ERROR)
         return EXIT_BOT_ERROR
     logger.info(
-        "oreeai bot starting: name=%s call_id=%s consent_ack=%s image_sha=%s",
+        "oreeai bot starting: name=%s call_id=%s consent_ack=%s auth_mode=%s image_sha=%s",
         bot_name,
         call_id,
         consent_ack,
+        auth_mode,
         os.environ.get("GIT_SHA", "unknown"),
     )
     if not consent_ack:
@@ -380,7 +497,7 @@ def main() -> int:
     outcome: BotOutcome | None = None
     exit_code = EXIT_BOT_ERROR
     try:
-        outcome = _run(meeting_url, bot_name, call_id, stop)
+        outcome = _run(meeting_url, bot_name, call_id, stop, auth_mode, profile_dir)
         exit_code = _finalize_recording(outcome, _wav_path(call_id), silence_floor)
     except Exception:
         logger.exception("unexpected bot error")

@@ -1,5 +1,6 @@
 audio/
 debug/
+chrome-profile/
 *.wav
 __pycache__/
 *.pyc

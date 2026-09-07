@@ -20,5 +20,14 @@ export PULSE_SERVER=unix:/run/pulse/native
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
 
+# Interactive one-time sign-in for the persistent Chrome profile. VNC and
+# noVNC bind loopback only; the Makefile publishes 7900 on 127.0.0.1.
+if [ "${BOT_ENTRY_MODE:-run}" = "login" ]; then
+  x11vnc -display :99 -localhost -nopw -forever -shared -bg >/dev/null 2>&1
+  websockify --web=/usr/share/novnc/ 7900 localhost:5900 >/tmp/oreeai-websockify.log 2>&1 &
+  cd /app
+  exec python -m bot.login
+fi
+
 cd /app
 exec python -m bot.join_meet

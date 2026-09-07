@@ -32,6 +32,7 @@ class SelectorSet(Protocol):
     removed_indicator: SelectorQuery
     participant_count_button: SelectorQuery
     alone_hint: SelectorQuery
+    signed_in_indicator: SelectorQuery
 
 
 _DEFAULT_SELECTOR_SET: SelectorSet = selectors
@@ -111,6 +112,19 @@ def is_call_ended(
     if ended is not None:
         return True, f"call ended: {_locator_detail(ended)}"
     return False, "no call-ended notice visible"
+
+
+def is_signed_in(page: Page, selector_set: SelectorSet = _DEFAULT_SELECTOR_SET) -> tuple[bool, str]:
+    """Whether the page shows an active Google session.
+
+    The indicator is the signed-in account avatar ("Google Account: Name
+    (email)"), not bare "Google Account" text: Chrome's first-run promo copy
+    contains the bare text with no session behind it.
+    """
+    signed_in = selector_set.signed_in_indicator(page, timeout_ms=_POLL_TIMEOUT_MS)
+    if signed_in is not None:
+        return True, f"google session active: {_locator_detail(signed_in)}"
+    return False, "no signed-in session visible"
 
 
 def participant_count(
