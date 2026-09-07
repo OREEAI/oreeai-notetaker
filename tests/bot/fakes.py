@@ -114,6 +114,21 @@ class FakeLocator:
             return ""
         return self._elements[0].text
 
+    def bounding_box(self) -> dict[str, float] | None:
+        if not self._elements or not _is_visible(self._elements[0]):
+            return None
+        return {"x": 0.0, "y": 0.0, "width": 10.0, "height": 10.0}
+
+    def click(self, **kwargs: object) -> None:
+        del kwargs
+        return None
+
+
+class _FakeMouse:
+    def move(self, *args: object, **kwargs: object) -> None:
+        del args, kwargs
+        return None
+
 
 _SIMPLE_ATTRIBUTE_SELECTOR = re.compile(
     r"(?P<tag>[A-Za-z][\w-]*)\[(?P<attr>[\w-]+)\*=\"(?P<value>[^\"]+)\"\s*i\]"
@@ -132,6 +147,7 @@ class FakePage:
         parser.feed(html)
         self._elements = parser.elements
         self.url = url
+        self.mouse = _FakeMouse()
 
     @classmethod
     def from_fixture(cls, path: Path) -> FakePage:
@@ -139,6 +155,13 @@ class FakePage:
 
     def wait_for_timeout(self, _timeout_ms: int) -> None:
         return None
+
+    def screenshot(self, **kwargs: object) -> bytes:
+        del kwargs
+        return b""
+
+    def evaluate(self, _expression: str) -> str:
+        return ""
 
     def get_by_role(self, role: str, *, name: str | re.Pattern[str] | None = None) -> FakeLocator:
         wanted = role.lower()
@@ -175,3 +198,26 @@ class FakePage:
                 if _matches_attribute(item, wanted_tag, wanted_attr, wanted_value)
             ]
         )
+
+
+class ScriptedPage(FakePage):
+    """A page whose DOM advances one fixture per poll.
+
+    Each `wait_for_timeout` (the loop's poll tick) loads the next fixture;
+    the last fixture repeats, so open-ended loops never run out of script.
+    """
+
+    def __init__(
+        self, fixtures: list[Path], url: str = "https://meet.google.com/abc-defg-hij"
+    ) -> None:
+        self._scripts = [path.read_text(encoding="utf-8") for path in fixtures]
+        self._index = 0
+        super().__init__(self._scripts[0], url=url)
+
+    def wait_for_timeout(self, _timeout_ms: int) -> None:
+        if self._index + 1 < len(self._scripts):
+            self._index += 1
+            parser = _SnapshotParser()
+            parser.feed(self._scripts[self._index])
+            self._elements = parser.elements
+        return None
