@@ -9,6 +9,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         locales \
         xvfb \
+        x11vnc \
+        novnc \
+        websockify \
         pulseaudio \
         pulseaudio-utils \
         fontconfig \

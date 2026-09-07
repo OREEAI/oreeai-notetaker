@@ -40,7 +40,8 @@ _LEAVE_CALL: tuple[RoleQuery, ...] = (("button", re.compile("Leave call.*", re.I
 _NAME_INPUT: tuple[RoleQuery, ...] = (("textbox", re.compile(r"your name.*", re.IGNORECASE)),)
 _KNOCKING: re.Pattern[str] = re.compile("Asking to be let in.*", re.IGNORECASE)
 _CALL_ENDED: re.Pattern[str] = re.compile(
-    r"meeting has ended.*|you[\u2019']?ve left the meeting.*|you left the meeting.*",
+    r"meeting has ended.*|you[\u2019']?ve left the meeting.*|you left the meeting.*|"
+    r"host ended the meeting.*",
     re.IGNORECASE,
 )
 _REMOVED: re.Pattern[str] = re.compile(
@@ -58,6 +59,16 @@ _PARTICIPANTS: tuple[RoleQuery, ...] = (
 _ALONE_HINT: re.Pattern[str] = re.compile(
     r"you[\u2019']?re the only one here.*|no one else is here.*",
     re.IGNORECASE,
+)
+# Signed-in account avatar, only present with a live Google session. This is
+# deliberately the colon-form accessible name ("Google Account: Name
+# (email)"): Chrome's first-run promo copy contains bare "Google Account"
+# text with no session, so a text query alone false-positives on fresh
+# profiles (caught by the login smoke). Aria-labels are not visible text,
+# hence the role query.
+_SIGNED_IN_AVATAR: RoleQuery = (
+    "button",
+    re.compile(r"google\s+account\s*:\s*\S", re.IGNORECASE),
 )
 
 
@@ -124,3 +135,7 @@ def participant_count_button(page: Page, timeout_ms: int = 1000) -> Locator | No
 
 def alone_hint(page: Page, timeout_ms: int = 1000) -> Locator | None:
     return _first_visible(page, _text_locators(page, (_ALONE_HINT,)), timeout_ms)
+
+
+def signed_in_indicator(page: Page, timeout_ms: int = 1000) -> Locator | None:
+    return _first_visible(page, _role_locators(page, (_SIGNED_IN_AVATAR,)), timeout_ms)

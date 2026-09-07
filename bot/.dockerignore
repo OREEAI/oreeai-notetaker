@@ -1,5 +1,9 @@
+# NOTE: `docker build -f bot/Dockerfile .` uses the repo-root .dockerignore
+# (rules are relative to the build context root, not this directory).
+# This file mirrors the bot-relevant rules for readability only.
 audio/
 debug/
+chrome-profile/
 *.wav
 *.png
 __pycache__/

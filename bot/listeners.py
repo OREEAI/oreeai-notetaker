@@ -382,7 +382,7 @@ def run_call_loop(
                     )
                 if now >= next_unknown_evidence:
                     debug_screenshot(page, "participant detection uncertain (periodic evidence)")
-                    logger.info("participant count unavailable (%s)", count_detail)
+                    logger.info("%s", count_detail)
                     next_unknown_evidence = now + UNKNOWN_ROOM_EVIDENCE_INTERVAL_S
         else:
             missed_leave += 1

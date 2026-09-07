@@ -24,6 +24,83 @@ Lifecycle timeouts can be overridden per run without changing the image:
 make bot-run MEETING_URL=<link> CONSENT_ACK=true CALL_ID=max-cap BOT_MAX_RECORD_DURATION=30
 ```
 
+## Join modes
+
+Meet's server-side scoring walls anonymous guest joins probabilistically
+(measured: 2 admissions / 5 walls on fresh links), so the bot ships two join
+identities behind `BOT_AUTH_MODE`:
+
+| Mode | Value | Behavior |
+|---|---|---|
+| Anonymous (guest) | `anonymous` | Throwaway Chrome profile; joins as a guest, types `BOT_NAME` into the pre-join name field. Code default. |
+| Authenticated (signed-in) | `authenticated` | Branded Chrome on the persistent profile at `/profile`; joins as the signed-in account, skips name typing. Documented production setting. |
+
+Everything downstream is identical in both modes: the lifecycle state
+machine, selectors, exit codes, audio graph, silence check, and the
+`OREEAI_BOT_RESULT` line. The stealth layer (`bot/stealth.py`,
+`bot/humanize.py`) stays on in both modes — signing in removes the
+anonymous-scoring tier, not the automation-fingerprint tier.
+
+The persistent profile holds the Google session (credentials). It lives in
+`bot/chrome-profile/` on the host (`BOT_PROFILE` Makefile var overrides),
+mounted at `/profile`. It is gitignored **and** dockerignored — it must never
+be committed or baked into the image — and the Makefile keeps it `chmod 700`.
+Treat it exactly like a password. Profile paths are never logged.
+
+Use a **dedicated Google account** for the bot, with its display name set to
+the bot's public name (this pre-solves the PR 3 fixed-name requirement for
+authenticated joins) and 2FA enabled. Never a personal account: if Google
+ever flags automated behavior, it flags the account.
+
+## One-time sign-in
+
+```bash
+make bot-login
+```
+
+This builds the image, creates the profile dir, and starts a login
+container: Xvfb + Chrome on the profile + noVNC published on
+**127.0.0.1:7900 only**. Open `http://127.0.0.1:7900` in a browser on the
+host, click **Connect**, and sign in
+with the dedicated bot account (complete 2FA), and wait — the script exits 0
+once it detects the session (default 600 s timeout via `BOT_LOGIN_TIMEOUT`).
+Future authenticated runs reuse that session. Nothing appears on the host
+desktop: the bot's Chrome runs inside the container's virtual display, and
+noVNC is how you see and drive it.
+
+Every authenticated run first verifies the session against
+`myaccount.google.com`. A missing profile or a signed-out session fails fast
+with exit 5 (`bot_error:google_session_missing` /
+`bot_error:google_session_invalid: ...`) and a "run make bot-login" hint —
+no Meet request is made.
+
+### Session persistence
+
+The Google session lives on the **host**, not in the container:
+
+- `make bot-login` mounts `bot/chrome-profile/` into the container at
+  `/profile`, and Chrome writes every cookie/session token straight to that
+  host directory.
+- The container is disposable (`--rm`); the image never contains the profile
+  (`chrome-profile/` is dockerignored, so `COPY bot/` cannot bake it in).
+  Full rebuilds, `--no-cache` included, do not touch it.
+- Every later `make bot-run` mounts the same host dir, so the session is
+  picked up again.
+
+Three caveats:
+
+1. **Google-side expiry** — the session persists until *Google* invalidates
+   it (re-auth challenge, password change, long inactivity). The session
+   gate catches that: authenticated runs exit 5 with
+   `google_session_invalid`; the fix is re-running `make bot-login`.
+2. **`git clean -fdx` deletes it** — the profile is gitignored; treat it as
+   credentials and don't nuke untracked files casually (`make clean` is
+   safe).
+3. **One Chrome per profile** — never run `bot-login` and a bot run at the
+   same time; Chrome locks the profile dir. Sequential use is fine, and both
+   use the identical branded-Chrome build/args, which keeps Google's device
+   identity consistent.
+
 `make bot-run` creates and mounts `bot/audio` as `/audio` inside the
 container (the WAV lands there), plus `bot/debug` as `/debug` for
 troubleshooting screenshots. Both are gitignored local dirs. Stop the bot
@@ -65,6 +142,10 @@ or launch-config change, before spending a manual gate run on it.
 | `BOT_MAX_RECORD_DURATION` | no | `10800` | Maximum recording seconds before the bot leaves with exit `0` and `end_reason=give_up`. |
 | `BOT_SILENCE_RMS_FLOOR` | no | `50` | Whole-WAV RMS floor in raw 16-bit units. A clean exit with a finished recording below this floor exits `7` (`silent_recording`). |
 | `PAREC_DEVICE` | no | `virtual_speaker.monitor` | Diagnostic PulseAudio-device override for `parec`. Pointing it at `silent_sink.monitor` exercises the silence path with a live recorder and a silent source. |
+| `BOT_AUTH_MODE` | no | `anonymous` | Join identity: `anonymous` (guest) or `authenticated` (signed-in via the persistent profile). Production runs use `authenticated`. |
+| `BOT_PROFILE_DIR` | no | `/profile` | Container-side Chrome profile path for authenticated mode. The Makefile mounts the host profile dir here. |
+| `BOT_ENTRY_MODE` | no | `run` | `run` starts the bot; `login` (used by `make bot-login`) starts the interactive sign-in bootstrap with noVNC. |
+| `BOT_LOGIN_TIMEOUT` | no | `600` | Seconds `make bot-login` waits for the sign-in to complete. |
 
 The container runs as uid `1000`. If your host uid differs, make the audio
 mount writable: `chmod 777 bot/audio` (the Makefile target does this for you).
@@ -271,10 +352,15 @@ identifiers; the silence check reports only numeric RMS and floor values.
 
 The real-Meet scenarios exercise the happy path, late admission, never
 admitted, host never starts, removal, empty room, maximum duration, and
-silence detection. For every run, check that the first log line's
+silence detection. Run them in **authenticated mode** (the anonymous path is
+kept for A/B only): fresh link per scenario, a few minutes apart — the
+hour-long cooldowns were an anonymous-scoring artifact and do not apply to
+signed-in joins. For every run, check that the first log line's
 `image_sha=` matches the commit under test, then compare the logged
 transitions, final `OREEAI_BOT_RESULT` line, container exit code, and—where a
-recording should exist—the WAV format and size.
+recording should exist—the WAV format and size. Note: `${PIPESTATUS[0]}`
+after `make bot-run` is make's own exit code, not the container's; the `bot
+finished: exit_code=N` log line is ground truth.
 
 If the meeting blocks anonymous guests, the bot fails fast (~4 s) with
 "meeting blocks anonymous guests — host must enable Quick access" and a
