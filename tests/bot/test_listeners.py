@@ -72,6 +72,7 @@ def run(
     recorder: FakeRecorder,
     timeouts: Timeouts,
     stop_after: int | None = None,
+    announce: object = None,
 ) -> BotOutcome:
     calls = 0
 
@@ -86,6 +87,7 @@ def run(
         recorder=recorder,
         timeouts=timeouts,
         stop_requested=stop_requested,
+        announce=announce,  # type: ignore[arg-type]
     )
 
 
@@ -207,3 +209,53 @@ def test_recorder_start_failure() -> None:
     assert outcome.end_reason is None
     assert outcome.recording_started is False
     assert recorder.started is False
+
+
+def test_announce_fires_once_after_recording_starts() -> None:
+    recorder = FakeRecorder()
+    announcements: list[object] = []
+    in_call = "in_call_three"
+    outcome = run(
+        scripted(in_call, in_call, in_call),
+        recorder,
+        LONG,
+        stop_after=2,
+        announce=announcements.append,
+    )
+
+    assert outcome.exit_code == EXIT_OK
+    assert len(announcements) == 1
+
+
+def test_announce_never_fires_without_recording() -> None:
+    recorder = FakeRecorder()
+    announcements: list[object] = []
+    outcome = run(
+        scripted("knocking"),
+        recorder,
+        INSTANT,
+        announce=announcements.append,
+    )
+
+    assert outcome.exit_code == EXIT_NEVER_ADMITTED
+    assert announcements == []
+    assert recorder.started is False
+
+
+def test_announce_failure_does_not_break_loop() -> None:
+    recorder = FakeRecorder()
+
+    def bad_announce(_page: object) -> None:
+        raise RuntimeError("chat exploded")
+
+    in_call = "in_call_three"
+    outcome = run(
+        scripted(in_call, "call_ended"),
+        recorder,
+        LONG,
+        announce=bad_announce,
+    )
+
+    assert outcome.exit_code == EXIT_OK
+    assert outcome.end_reason == "call_ended"
+    assert recorder.stopped is True

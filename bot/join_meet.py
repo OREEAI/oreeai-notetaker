@@ -12,9 +12,16 @@ anti-bot check detects Playwright's bundled Chromium build at join time.
 
     Env vars:
     MEETING_URL   (required) the https://meet.google.com/... link to join
-    BOT_NAME      display name; spike-only - PR 3 hard-codes "Oree Notetaker"
-    CONSENT_ACK   logged pass-through only; enforcement lands in PR 3
+    CONSENT_ACK   (required) must be true; without it the bot exits 6 before
+                  any browser work. Consent lives in bot/consent.py.
+    BOT_NAME      DEPRECATED: the name is hard-coded to "Oree Notetaker"
+                  (PR 3). Any other value logs a deprecation warning naming
+                  both values, then the hard-coded name is used. In
+                  authenticated mode the signed-in account's display name is
+                  the consent identity and no typing happens.
     CALL_ID       WAV file name, default "spike" (runner passes the real id)
+    ENVIRONMENT   deployment env; "production" makes the authenticated-mode
+                  account-name check fatal, anything else warns only
     LOG_LEVEL     stdlib level name, default INFO
     DEBUG_DIR     where to write /tmp/oreeai-debug-<ts>.png on state stall;
                   default /tmp (which local runs set to /debug via Makefile
@@ -56,7 +63,7 @@ from typing import TYPE_CHECKING
 
 from playwright.sync_api import Browser, BrowserContext, Page, Playwright, sync_playwright
 
-from bot import selectors, states
+from bot import consent, selectors, states
 from bot.humanize import (
     click_like_human,
     dwell_before_start,
@@ -66,6 +73,7 @@ from bot.humanize import (
 )
 from bot.listeners import (
     EXIT_BOT_ERROR,
+    EXIT_CONSENT_MISSING,
     EXIT_OK,
     EXIT_SILENT_RECORDING,
     BotOutcome,
@@ -277,10 +285,21 @@ def _check_session(page: Page) -> BotOutcome | None:
     signed_in, detail = states.is_signed_in(page)
     if signed_in:
         logger.info("google session active (%s)", detail)
+        identity_problem = consent.verify_consent_identity(
+            consent.account_display_name(page), environment=consent.environment()
+        )
+        if identity_problem is not None:
+            logger.error("%s", identity_problem)
+            return BotOutcome(EXIT_BOT_ERROR, None, f"consent identity: {identity_problem}")
         return None
     reason = f"google session invalid: {detail} (run make bot-login to sign in)"
     logger.error("%s", reason)
     return BotOutcome(EXIT_BOT_ERROR, None, reason)
+
+
+def _announce_consent(page: Page) -> None:
+    """Listener hook: post the consent message once recording has started."""
+    consent.post_chat_announcement(page)
 
 
 def _join_and_record(
@@ -299,7 +318,10 @@ def _join_and_record(
 
     dwell_before_start(page)
     if authenticated:
-        logger.info("authenticated mode: joining with the account display name")
+        logger.info(
+            "authenticated mode: signed-in account display name is the consent signal "
+            "(no name typing)"
+        )
     else:
         name_field = selectors.name_input(page, timeout_ms=MEDIA_MUTE_TIMEOUT_MS)
         if name_field is not None:
@@ -334,6 +356,7 @@ def _join_and_record(
             recorder=recorder,
             timeouts=_timeouts_from_env(),
             stop_requested=lambda: stop.requested,
+            announce=_announce_consent,
         )
         return outcome, recorder
     except Exception:
@@ -462,16 +485,12 @@ def _emit_result(call_id: str, outcome: BotOutcome | None, exit_code: int) -> No
 def main() -> int:
     _configure_logging()
     meeting_url = os.environ.get("MEETING_URL", "").strip()
-    bot_name = os.environ.get("BOT_NAME", "Oree Spike")
-    consent_ack = os.environ.get("CONSENT_ACK", "").strip().lower() in ("1", "true", "yes")
+    bot_name = consent.resolve_bot_name()
+    consent_ack = consent.consent_granted()
     call_id = os.environ.get("CALL_ID", "").strip() or "spike"
     auth_mode = parse_auth_mode(os.environ.get("BOT_AUTH_MODE", ""))
     profile_dir = os.environ.get("BOT_PROFILE_DIR", "").strip() or PROFILE_DIR_DEFAULT
 
-    if not meeting_url:
-        logger.error("MEETING_URL is required")
-        _emit_result(call_id, None, EXIT_BOT_ERROR)
-        return EXIT_BOT_ERROR
     logger.info(
         "oreeai bot starting: name=%s call_id=%s consent_ack=%s auth_mode=%s image_sha=%s",
         bot_name,
@@ -481,7 +500,18 @@ def main() -> int:
         os.environ.get("GIT_SHA", "unknown"),
     )
     if not consent_ack:
-        logger.warning("CONSENT_ACK not set; accepted in the spike, enforcement lands in PR 3")
+        logger.error(
+            "CONSENT_ACK must be set to true to start the bot; refusing to join without "
+            "explicit recording consent (exit %s). Set CONSENT_ACK=true once every "
+            "participant has been told the call is recorded",
+            EXIT_CONSENT_MISSING,
+        )
+        _emit_result(call_id, None, EXIT_CONSENT_MISSING)
+        return EXIT_CONSENT_MISSING
+    if not meeting_url:
+        logger.error("MEETING_URL is required")
+        _emit_result(call_id, None, EXIT_BOT_ERROR)
+        return EXIT_BOT_ERROR
 
     stop = _Stop()
 

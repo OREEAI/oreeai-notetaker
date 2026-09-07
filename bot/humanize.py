@@ -42,13 +42,23 @@ def move_to(page: Page, target: Locator) -> None:
     page.mouse.move(x, y, steps=int(_jitter(15, 25)))
 
 
-def type_text(page: Page, field: Locator, text: str) -> None:
-    """Click the field, clear any pre-filled value, then type key-by-key."""
+def type_text(
+    page: Page,
+    field: Locator,
+    text: str,
+    *,
+    char_delay_ms: tuple[float, float] = (40.0, 120.0),
+) -> None:
+    """Click the field, clear any pre-filled value, then type key-by-key.
+
+    ``char_delay_ms`` bounds the per-character jitter; callers post-admission
+    (chat announcement) may pass a shorter range to land the message sooner.
+    """
     field.click()
     field.press("ControlOrMeta+a")
     field.press("Delete")
     for char in text:
-        page.wait_for_timeout(int(_jitter(40, 120)))
+        page.wait_for_timeout(int(_jitter(*char_delay_ms)))
         page.keyboard.type(char)
 
 

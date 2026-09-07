@@ -1,11 +1,13 @@
-# OreeAI Meet bot (PR 2 — join lifecycle)
+# OreeAI Meet bot (PRs 2–3 — join lifecycle + consent)
 
-A container that joins a real Google Meet call as a guest, tracks the call
+A container that joins a real Google Meet call, tracks the call
 through every real-world lifecycle state, records meeting audio to a WAV
 file, and leaves cleanly on every exit path. PR 1 proved the bot can join
-and capture audible audio; this lifecycle layer makes waiting rooms, late
-admission, removals, empty rooms, alone grace, maximum recording duration,
-and silent-capture detection explicit and testable.
+and capture audible audio; PR 2 made waiting rooms, late admission,
+removals, empty rooms, alone grace, maximum recording duration, and
+silent-capture detection explicit and testable; PR 3 makes the bot a
+**visibly consenting recorder** (fixed name + in-call chat announcement)
+that refuses to start without an explicit `CONSENT_ACK`.
 
 The bot is a **separate deployable**. It must never import `oreeai_nt`, and
 the service must never import `bot/`. The only contract between them is the
@@ -15,7 +17,7 @@ container boundary and the exit-code table below.
 
 ```bash
 make bot-build
-make bot-run MEETING_URL=https://meet.google.com/xxx-xxxx-xxx BOT_NAME=Spike CONSENT_ACK=true
+make bot-run MEETING_URL=https://meet.google.com/xxx-xxxx-xxx CONSENT_ACK=true
 ```
 
 Lifecycle timeouts can be overridden per run without changing the image:
@@ -32,8 +34,8 @@ identities behind `BOT_AUTH_MODE`:
 
 | Mode | Value | Behavior |
 |---|---|---|
-| Anonymous (guest) | `anonymous` | Throwaway Chrome profile; joins as a guest, types `BOT_NAME` into the pre-join name field. Code default. |
-| Authenticated (signed-in) | `authenticated` | Branded Chrome on the persistent profile at `/profile`; joins as the signed-in account, skips name typing. Documented production setting. |
+| Anonymous (guest) | `anonymous` | Throwaway Chrome profile; joins as a guest and types the fixed name `Oree Notetaker` into the pre-join name field. Code default. |
+| Authenticated (signed-in) | `authenticated` | Branded Chrome on the persistent profile at `/profile`; joins as the signed-in account, skips name typing — the account's display name **is** the consent signal. Documented production setting. |
 
 Everything downstream is identical in both modes: the lifecycle state
 machine, selectors, exit codes, audio graph, silence check, and the
@@ -48,9 +50,12 @@ be committed or baked into the image — and the Makefile keeps it `chmod 700`.
 Treat it exactly like a password. Profile paths are never logged.
 
 Use a **dedicated Google account** for the bot, with its display name set to
-the bot's public name (this pre-solves the PR 3 fixed-name requirement for
-authenticated joins) and 2FA enabled. Never a personal account: if Google
-ever flags automated behavior, it flags the account.
+**`Oree Notetaker`** (the fixed consent identity — see [Consent](#consent))
+and 2FA enabled. Never a personal account: if Google ever flags automated
+behavior, it flags the account. In development and staging any display name
+works (the bot logs a warning on a mismatch); in production
+(`ENVIRONMENT=production`) a mismatched or undeterminable name is fatal
+before any Meet request.
 
 ## One-time sign-in
 
@@ -126,14 +131,46 @@ Chrome incognito output to rank what still distinguishes the automated
 client. Re-run it after any Dockerfile
 or launch-config change, before spending a manual gate run on it.
 
+## Consent
+
+Every participant must be able to see, from inside the meeting, that a
+recording is happening — without being told beforehand. The policy lives in
+`bot/consent.py`.
+
+- **Fixed name.** The bot's identity is hard-coded to `Oree Notetaker`.
+  Anonymous mode types it into the green room; authenticated mode skips
+  typing — the dedicated account's display name *is* the consent signal, and
+  `ENVIRONMENT=production` enforces that name (exit 5 before any Meet
+  request on a mismatch; development/staging warn only).
+- **`CONSENT_ACK` gate.** The bot refuses to start (exit `6`) unless
+  `CONSENT_ACK=true` is set, checked before any browser work. The runner
+  (PR 5) passes it per call; the API-level requirement lands there too.
+- **In-call announcement.** Right after recording starts, the bot posts this
+  exact message to the meeting chat:
+
+  > Hi, this is Oree Notetaker. This call is being recorded and transcribed
+  > for note-taking. Let me know if you'd like me to leave.
+
+  The step is best-effort: success, failure, and element-not-found are
+  distinct log lines (logger `oreeai.bot.consent`), with a 10 s per-element
+  finder timeout (covers the post-admit UI race). A missing or broken chat
+  UI logs a warning, saves a debug screenshot, and the recording continues —
+  **chat never stops recording**; the visible name remains the signal. Host
+  chat restrictions are handled the same way (warn, continue).
+- **`BOT_NAME` is deprecated.** Any value other than the exact `Oree
+  Notetaker` logs a deprecation warning naming both values, then the
+  hard-coded name is used. Person-like names ("Alex") are never honored —
+  the participant list must never show a human-sounding recorder.
+
 ## Env vars
 
 | Var | Required | Default | Notes |
 |---|---|---|---|
 | `MEETING_URL` | yes | — | `https://meet.google.com/xxx-xxxx-xxx` |
-| `BOT_NAME` | no | `Oree Spike` | **Spike only.** PR 3 hard-codes the name to `Oree Notetaker`. The bot types it into Meet's "Your name" field before joining. |
-| `CONSENT_ACK` | no | — | Logged pass-through in the spike; refusing to start without it lands in PR 3. |
+| `CONSENT_ACK` | yes | — | Must be `true` or the bot exits `6` before any browser work. The Makefile honors it from `.env`; override per run on the command line. |
+| `BOT_NAME` | no | — | **Deprecated.** The name is hard-coded to `Oree Notetaker` (PR 3). Any other value logs a deprecation warning naming both values, then the hard-coded name is used. |
 | `CALL_ID` | no | `spike` | Names the WAV: `/audio/<CALL_ID>.wav`. The runner later passes the real call id. |
+| `ENVIRONMENT` | no | `local` | Deployment env. `production` makes the authenticated-mode account-name consent check fatal (dev/staging warn only). |
 | `LOG_LEVEL` | no | `INFO` | stdlib level name |
 | `DEBUG_DIR` | no | `/tmp` | Where stall screenshots land. The Makefile sets it to `/debug` (mounted as `bot/debug`) so screenshots survive the `--rm` container. |
 | `BOT_WAITING_ROOM_TIMEOUT` | no | `600` | Seconds waiting for admission before exiting `2` (`never_admitted`). |
@@ -194,7 +231,7 @@ unknown count is never treated as an empty room.
 | 3 | Removed mid-call | `done`, `end_reason=removed` |
 | 4 | Lifecycle timeout: waiting in an unstarted/empty room after admission | `failed`; the runner reports `join_timeout` when the bot never recorded and `no_show` when it recorded an empty room |
 | 5 | Unexpected bot error: pre-join failure, blocked join attempt, dead recorder, or unavailable room detection | `failed`, `failure_reason=bot_error:<detail>` |
-| 6 | Consent refused | Reserved for PR 3 |
+| 6 | `CONSENT_ACK` not true (or unset); refused before any browser launch | `failed`, `failure_reason=consent_missing` |
 | 7 | A finished clean recording is below `BOT_SILENCE_RMS_FLOOR` | `failed`, `failure_reason=silent_recording` |
 
 The bot also emits one machine-readable terminal line for the future runner:
@@ -323,7 +360,9 @@ based, `en-US` forced). A Meet UI change must be a one-file fix. When state
 detection stalls, the bot saves a debug screenshot to
 `$DEBUG_DIR/oreeai-debug-<ts>.png` (`bot/debug/` in local runs) and logs a
 warning with the page URL and a snippet of visible page text. Lifecycle
-selectors include the participant-count control and Meet's alone-room text.
+selectors include the participant-count control and Meet's alone-room text;
+consent selectors (PR 3) are the in-call chat open control, message box, and
+send button.
 
 `bot/selectors.py` is imported only as part of the `bot` package
 (`python -m bot.join_meet`): a flat script import from inside `bot/` would
@@ -332,8 +371,8 @@ shadow Python's stdlib `selectors` module, which Playwright/asyncio need.
 ## Logging
 
 stdlib `logging`, logger `oreeai.bot` (plus `oreeai.bot.record`,
-`oreeai.bot.states`, and `oreeai.bot.result`). Every lifecycle transition is
-logged as:
+`oreeai.bot.states`, `oreeai.bot.consent`, and `oreeai.bot.result`). Every
+lifecycle transition is logged as:
 
 ```text
 call_id=<id> from_state=<previous> to_state=<next> reason=<why>
