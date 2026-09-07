@@ -1,5 +1,13 @@
 UV ?= uv
 
+# Bot targets honor .env (e.g. BOT_AUTH_MODE) via the passthrough -e flags
+# below. Precedence: command-line assignments win over .env values;
+# inherited shell env loses to .env (unlike compose). Missing .env is fine.
+-include .env
+export BOT_AUTH_MODE BOT_PROFILE_DIR BOT_LOGIN_TIMEOUT PAREC_DEVICE
+export BOT_WAITING_ROOM_TIMEOUT BOT_EMPTY_ROOM_TIMEOUT BOT_ALONE_GRACE
+export BOT_MAX_RECORD_DURATION BOT_SILENCE_RMS_FLOOR
+
 .PHONY: setup dev test lint format typecheck makemigrations migrate downgrade docker-up docker-down docker-logs docker-rebuild bot-build bot-run bot-probe clean
 
 setup:
