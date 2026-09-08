@@ -36,6 +36,9 @@ module-name = "oreeai_notetaker"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = "-q"
+markers = [
+    "docker: requires a local docker daemon; skipped cleanly when it is absent",
+]
 
 [tool.ruff]
 line-length = 100
