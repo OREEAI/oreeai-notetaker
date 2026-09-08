@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
@@ -22,6 +23,7 @@ from bot.runner import (
     RESTART_POLICY,
     RunnerConfig,
     SpawnRequest,
+    acquire_runner_hold,
     admit,
     build_spawn_args,
     container_name,
@@ -304,6 +306,37 @@ def test_try_spawn_creates_audio_dir(tmp_path: Path) -> None:
     cfg = make_cfg(tmp_path)
     try_spawn(cfg, FakeDocker(), [], make_request())
     assert (tmp_path / "audio").is_dir()
+
+
+def test_single_instance_hold(tmp_path: Path) -> None:
+    hold = str(tmp_path / "runner.lock.hold")
+    fd = acquire_runner_hold(hold)
+    assert fd is not None  # first instance wins
+    try:
+        assert acquire_runner_hold(hold) is None  # second instance refused
+    finally:
+        os.close(fd)
+    fd2 = acquire_runner_hold(hold)  # released -> re-acquirable
+    assert fd2 is not None
+    os.close(fd2)
+
+
+def test_try_spawn_survives_lockfile_write_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = make_cfg(tmp_path)
+    docker = FakeDocker()
+
+    def boom(path: str, ids: Sequence[str]) -> None:
+        raise OSError("read-only lock dir")
+
+    monkeypatch.setattr("bot.runner.save_lock", boom)
+    active: list[str] = []
+    reason = try_spawn(cfg, docker, active, make_request("one"))
+    assert reason is not None
+    assert "cannot write lockfile" in reason
+    assert active == []  # reservation rolled back in memory
+    assert docker.run_calls() == []  # no container spawned
 
 
 # ---------------------------------------------------------------------------

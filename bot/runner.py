@@ -21,6 +21,9 @@ acknowledged recording consent for the calls they queue. The API-level gate
 (`consent_ack` on `POST /calls`) lands in PR 5; exit code 6 /
 `consent_missing` keep the exact meaning defined in the shared contracts.
 
+Exactly one runner instance may run: an flock hold on `<lock>.hold`
+refuses a second start (the ceiling bookkeeping is per-instance).
+
 Independence (standing rules): standard library only — this module must
 never import `oreeai_notetaker`, and the docker socket lives here (the
 runner), never in the API process. Logs carry call ids and container names
@@ -51,6 +54,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import fcntl
 import json
 import logging
 import os
@@ -211,9 +215,10 @@ def build_spawn_args(cfg: RunnerConfig, request: SpawnRequest) -> list[str]:
     """Full `docker run -d` argv for one bot, envelope flags included.
 
     Envelope numbers mirror bot/docker-compose.yml — the compose/runner
-    agreement is locked by tests/bot/test_runner.py. `command` (when set)
-    overrides the container entrypoint and exists for docker-level tests;
-    real runs leave it None so the shipped entrypoint is used.
+    agreement is locked by tests/bot/test_runner.py. `command` (when set) is
+    appended after the image as the container command — it overrides the
+    shipped entrypoint only on entrypoint-less images (docker-level tests
+    use busybox); real runs leave it None so the shipped entrypoint runs.
 
     NOTE: no `--rm` here, unlike `make bot-run` — the docker engine rejects
     `--rm` together with a restart policy, and the bounded restart is the
@@ -346,6 +351,25 @@ def save_lock(path: str, ids: Sequence[str]) -> None:
     os.replace(tmp, target)
 
 
+def acquire_runner_hold(hold_path: str) -> int | None:
+    """Take the process-lifetime single-instance hold, or report it taken.
+
+    Returns the open fd on success (caller keeps it for the process
+    lifetime; closing releases the hold) and None when another runner
+    instance already holds the file. The hold lives in a separate
+    `<lock>.hold` file — save_lock() renames the JSON lock itself, which
+    would silently defeat a flock taken on it. Linux (fcntl); every
+    surface this runner targets is Linux.
+    """
+    fd = os.open(hold_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return None
+    return fd
+
+
 # ---------------------------------------------------------------------------
 # docker plumbing (injectable so tests can fake the daemon)
 # ---------------------------------------------------------------------------
@@ -432,17 +456,23 @@ def try_spawn(
 ) -> str | None:
     """Admit (id reserved in the lockfile before the container exists, so a
     crash between the two cannot leak an uncounted slot) or refuse. Returns
-    None on success, the refusal/error reason otherwise."""
+    None on success, the refusal/error reason otherwise — lockfile-write
+    failures included, so no caller path can raise into the main loop."""
     refusal = admit(active, cfg.concurrency, request.call_id)
     if refusal is not None:
         return refusal
     active.append(request.call_id)
-    save_lock(cfg.lock_path, active)
+    try:
+        save_lock(cfg.lock_path, active)
+    except OSError as exc:
+        active.remove(request.call_id)
+        return f"spawn failed for call {request.call_id}: cannot write lockfile: {exc}"
     try:
         spawn(cfg, docker, request)
     except (SpawnError, OSError) as exc:
         active.remove(request.call_id)
-        save_lock(cfg.lock_path, active)
+        with contextlib.suppress(OSError):
+            save_lock(cfg.lock_path, active)  # best effort; next tick re-derives
         return f"spawn failed for call {request.call_id}: {exc}"
     return None
 
@@ -590,6 +620,15 @@ def setup_logging(level: str) -> None:
 
 def run(cfg: RunnerConfig, docker: DockerCommand | None = None) -> int:
     command = docker or _subprocess_docker
+    hold_path = cfg.lock_path + ".hold"
+    hold_fd = acquire_runner_hold(hold_path)
+    if hold_fd is None:
+        logger.error(
+            "another runner instance is already running (hold: %s) — the "
+            "ceiling is per-instance, so exactly one runner may run",
+            hold_path,
+        )
+        return 1
     stop_event = threading.Event()
 
     def _stop(signum: int, _frame: object) -> None:
@@ -631,7 +670,7 @@ def run(cfg: RunnerConfig, docker: DockerCommand | None = None) -> int:
     ).start()
 
     offset = 0
-    next_tick = 0.0
+    next_tick = time.monotonic() + POLL_INTERVAL_S  # startup pass already ran
     while not stop_event.is_set():
         try:
             line = commands.get(timeout=0.5)

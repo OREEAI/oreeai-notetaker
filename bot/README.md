@@ -179,8 +179,11 @@ containers as it goes, so slots free without operator intervention.
 (Runner-spawned containers carry no `--rm`: the docker engine forbids it
 alongside a restart policy, and the bounded restart is safety-critical.
 `make bot-run` keeps `--rm` — it never sets a restart policy.) The lockfile
-is process-local to the runner — exactly one runner instance may run; the
-startup reconcile is what makes a crash or SIGKILL safe.
+is process-local to the runner — exactly one runner instance may run, and
+this is enforced: a second start takes an flock hold on
+`<lock>.hold` and exits 1 with `another runner instance is already
+running` when it's taken. The startup reconcile is what makes a crash or
+SIGKILL safe.
 
 ```bash
 make bot-runner                                 # interactive: join <MEETING_URL> | status | quit
@@ -209,14 +212,16 @@ each request its own `profile` path.
 
 The manual "You test this" scenarios have automated mirrors:
 `tests/bot/test_runner.py` (pure logic — envelope pins, ceiling refusal,
-reconcile planning, lockfile) runs in CI; `tests/bot/test_runner_docker.py`
-(docker marker; needs a daemon, no Meet and no bot image) mirrors
-spawn-and-inspect the real limits, hold-3-refuse-the-4th, and
-reconcile-after-kill:
+reconcile planning, lockfile, single-instance hold) runs everywhere;
+`tests/bot/test_runner_docker.py` (docker marker; needs a daemon — present
+in CI, so the suite runs there too; skips cleanly when absent; no Meet and
+no bot image) mirrors spawn-and-inspect the real limits,
+hold-3-refuse-the-4th, and reconcile-after-kill:
 
 ```bash
-uv run pytest -m "not docker"       # CI lane
-uv run pytest tests/bot/test_runner_docker.py
+uv run pytest tests/bot/test_runner.py          # pure logic, no docker
+uv run pytest tests/bot/test_runner_docker.py   # real containers (daemon needed)
+uv run pytest -m "not docker"                   # daemon-less machines: logic lane only
 RUNNER_BOMB_TEST=1 uv run pytest tests/bot/test_runner_docker.py  # + the OOM-bomb mirror
 ```
 
