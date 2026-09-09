@@ -201,6 +201,27 @@ def test_stop_request() -> None:
     assert recorder.stopped is True
 
 
+def test_knock_page_with_leave_button_never_admits() -> None:
+    """2026-09-09 Meet variant regression (PR 4 manual-run evidence): the
+    admission-wait page shows a "Leave call" control next to the knocking
+    text. The loop must stay in the waiting-room phase — no recording, no
+    empty-room timer — until real admission.
+    """
+    recorder = FakeRecorder()
+    outcome = run(
+        scripted("knocking_with_leave", "knocking_with_leave", "knocking_with_leave"),
+        recorder,
+        LONG,
+        stop_after=2,
+    )
+
+    assert outcome.exit_code == EXIT_OK
+    assert outcome.end_reason is None
+    assert outcome.recording_started is False
+    assert recorder.started is False
+    assert recorder.stopped is False
+
+
 def test_recorder_start_failure() -> None:
     recorder = FakeRecorder(fail_on_start=True)
     outcome = run(scripted("in_call_three"), recorder, LONG)

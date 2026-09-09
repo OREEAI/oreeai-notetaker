@@ -20,7 +20,9 @@ def page(name: str) -> FakePage:
     return FakePage.from_fixture(FIXTURES / name)
 
 
-@pytest.mark.parametrize("fixture", ["waiting_room.html", "knocking.html"])
+@pytest.mark.parametrize(
+    "fixture", ["waiting_room.html", "knocking.html", "knocking_with_leave.html"]
+)
 def test_waiting_room_states(fixture: str) -> None:
     waiting, waiting_detail = states.is_in_waiting_room(page(fixture))
     admitted, _ = states.is_admitted(page(fixture))
@@ -42,6 +44,20 @@ def test_knocking_detail_names_admission_wait() -> None:
     _, detail = states.is_in_waiting_room(page("knocking.html"))
 
     assert "waiting for admission" in detail
+
+
+def test_knock_page_leave_button_is_not_admission() -> None:
+    """2026-09-09 Meet variant: the admission-wait page renders its own
+    "Leave call" control next to the knocking text. The leave button must
+    never read as admission while the bot is still knocking.
+    """
+    admitted, admitted_detail = states.is_admitted(page("knocking_with_leave.html"))
+    waiting, waiting_detail = states.is_in_waiting_room(page("knocking_with_leave.html"))
+
+    assert admitted is False
+    assert "still knocking" in admitted_detail
+    assert waiting is True
+    assert "waiting for admission" in waiting_detail
 
 
 @pytest.mark.parametrize(
