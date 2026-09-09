@@ -222,6 +222,54 @@ def test_knock_page_with_leave_button_never_admits() -> None:
     assert recorder.stopped is False
 
 
+def test_knock_page_with_leave_button_still_admits_after_knock_clears() -> None:
+    """The other edge of the same fix: once the page is the real call UI,
+    admission and recording proceed as before (guards against an
+    over-corrected knocking veto that never admits).
+    """
+    recorder = FakeRecorder()
+    outcome = run(
+        scripted("knocking_with_leave", "in_call_three", "in_call_three"),
+        recorder,
+        LONG,
+        stop_after=2,
+    )
+
+    assert outcome.exit_code == EXIT_OK
+    assert outcome.end_reason is None
+    assert outcome.recording_started is True
+    assert recorder.started is True
+
+
+def test_mid_call_knock_text_does_not_end_the_call() -> None:
+    """Review hardening: in-call copy that matches the knocking text query
+    (a participant-knock notification, chat, captions) must not fire the
+    missed-leave fallback while the leave control is present. The old
+    behavior would stop the recording and report a clean end on a live call:
+    missed_leave reaches the threshold at the fifth poll (admission's
+    ``continue`` skips the first page advance), so stop_after=5 keeps the
+    stop check behind it and ``end_reason`` is the discriminator.
+    """
+    recorder = FakeRecorder()
+    outcome = run(
+        scripted(
+            "in_call_three",
+            "in_call_knock_text",
+            "in_call_knock_text",
+            "in_call_knock_text",
+            "in_call_knock_text",
+        ),
+        recorder,
+        LONG,
+        stop_after=5,
+    )
+
+    assert outcome.exit_code == EXIT_OK
+    assert outcome.end_reason is None
+    assert outcome.recording_started is True
+    assert recorder.started is True
+
+
 def test_recorder_start_failure() -> None:
     recorder = FakeRecorder(fail_on_start=True)
     outcome = run(scripted("in_call_three"), recorder, LONG)
