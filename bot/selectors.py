@@ -38,7 +38,15 @@ _CAMERA: tuple[RoleQuery, ...] = (
 )
 _LEAVE_CALL: tuple[RoleQuery, ...] = (("button", re.compile("Leave call.*", re.IGNORECASE)),)
 _NAME_INPUT: tuple[RoleQuery, ...] = (("textbox", re.compile(r"your name.*", re.IGNORECASE)),)
-_KNOCKING: re.Pattern[str] = re.compile("Asking to be let in.*", re.IGNORECASE)
+# Knock-page marker, both variants: the older "Asking to be let in"
+# phrasing and the current "Please wait until a meeting host brings you
+# into the call" copy (2026-09-09 admission-wait evidence). The knock page
+# also renders a "Leave call" control, which must never read as admission
+# while this text is visible.
+_KNOCKING: re.Pattern[str] = re.compile(
+    r"asking to be let in.*|please wait until a meeting host.*",
+    re.IGNORECASE,
+)
 _CALL_ENDED: re.Pattern[str] = re.compile(
     r"meeting has ended.*|you[\u2019']?ve left the meeting.*|you left the meeting.*|"
     r"host ended the meeting.*",

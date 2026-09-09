@@ -74,8 +74,9 @@ def is_in_waiting_room(
     The waiting room includes both the pre-join green room and the
     post-click admission-wait screen. Meet's admission-wait page also
     renders a "Leave call" control so the knocker can back out, so the
-    knocking indicator is checked first: as long as "Asking to be let in"
-    is visible, the bot is waiting — no leave control can override that.
+    knocking indicator (either of its known wordings) is checked first: as
+    long as it is visible, the bot is waiting — no leave control can
+    override that.
     """
     knocking = selector_set.knocking_indicator(page, timeout_ms=_POLL_TIMEOUT_MS)
     if knocking is not None:
