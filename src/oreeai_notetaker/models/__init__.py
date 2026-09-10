@@ -1,3 +1,3 @@
-from oreeai_notetaker.models.meeting import Meeting
+from oreeai_notetaker.models.call import Call
 
-__all__ = ["Meeting"]
+__all__ = ["Call"]

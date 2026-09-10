@@ -1,10 +1,10 @@
 from typing import Any, Protocol
 
-from oreeai_notetaker.enums import MeetingPlatform
+from oreeai_notetaker.enums import CallPlatform
 
 
-class MeetingPlatformClient(Protocol):
-    platform: MeetingPlatform
+class CallPlatformClient(Protocol):
+    platform: CallPlatform
 
     async def fetch_meeting(self, external_id: str) -> dict[str, Any]: ...
 

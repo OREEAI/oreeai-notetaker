@@ -1,13 +1,18 @@
+import logging
+import secrets
 from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import Depends, Request
+from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from oreeai_notetaker.core.cache import CacheService
+from oreeai_notetaker.core.config import settings
 from oreeai_notetaker.db.session import get_session
-from oreeai_notetaker.repositories.meeting import MeetingRepository
-from oreeai_notetaker.services.meeting import MeetingService
+from oreeai_notetaker.repositories.call import CallRepository
+from oreeai_notetaker.services.call import CallService
+
+logger = logging.getLogger(__name__)
 
 
 async def get_db(
@@ -32,18 +37,28 @@ def get_cache(request: Request) -> CacheService:
 CacheDep = Annotated[CacheService, Depends(get_cache)]
 
 
-def get_meeting_repository(session: SessionDep) -> MeetingRepository:
-    return MeetingRepository(session)
+def get_call_repository(session: SessionDep) -> CallRepository:
+    return CallRepository(session)
 
 
-MeetingRepositoryDep = Annotated[MeetingRepository, Depends(get_meeting_repository)]
+CallRepositoryDep = Annotated[CallRepository, Depends(get_call_repository)]
 
 
-def get_meeting_service(
-    repository: MeetingRepositoryDep,
-    cache: CacheDep,
-) -> MeetingService:
-    return MeetingService(repository, cache)
+def get_call_service(repository: CallRepositoryDep, cache: CacheDep) -> CallService:
+    return CallService(repository, cache)
 
 
-MeetingServiceDep = Annotated[MeetingService, Depends(get_meeting_service)]
+CallServiceDep = Annotated[CallService, Depends(get_call_service)]
+
+
+async def require_api_key(
+    request: Request,
+    x_api_key: Annotated[str | None, Header()] = None,
+) -> None:
+    if x_api_key is None or not secrets.compare_digest(x_api_key, settings.api_key):
+        client_ip = request.client.host if request.client else "unknown"
+        logger.warning("rejected X-API-Key from %s", client_ip)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing API key",
+        )

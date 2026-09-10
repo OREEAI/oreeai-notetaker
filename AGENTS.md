@@ -40,15 +40,15 @@ api/  ->  services/  ->  repositories/  ->  models (SQLAlchemy)
 - **`services/`**: All business logic, validation rules, cache orchestration, cross-repo coordination. Returns Pydantic schemas (`schemas/`), receives repositories via constructor. This is where feature behavior lives.
 - **`repositories/`**: Data access only. Generic `BaseRepository` provides get/list/create/update/delete; subclasses add entity-specific queries. Returns ORM models. Never contains business rules.
 - **`models/`**: SQLAlchemy ORM models. Mixins in `db/base.py` (`UUIDPrimaryKeyMixin`, `TimestampMixin`) — reuse them for new tables.
-- **`enums/`**: Shared `StrEnum` types (e.g. `MeetingPlatform`, `MeetingStatus`) referenced across models, schemas, services, and integrations. Never define an enum inside `models/` if anything outside the model layer needs it — put it here, one file per domain (`enums/meeting.py`), re-exported in `enums/__init__.py`.
+- **`enums/`**: Shared `StrEnum` types (e.g. `CallPlatform`, `CallStatus`) referenced across models, schemas, services, and integrations. Never define an enum inside `models/` if anything outside the model layer needs it — put it here, one file per domain (`enums/call.py`), re-exported in `enums/__init__.py`.
 - **`schemas/`**: Pydantic DTOs. `*Create`, `*Update` (all-optional patch semantics via `model_dump(exclude_unset=True)`), `*Read` (with `from_attributes`).
 - **`core/`**: Cross-cutting: `config.py` (pydantic-settings; add new env vars here), `cache.py` (`CacheService`, Redis-backed, degrades gracefully to no-op when Redis is down), `exceptions.py` (`AppError` subclasses are mapped to HTTP responses automatically in `main.py`).
-- **`integrations/`**: External platform clients (Google Meet, Zoom). Implement the `MeetingPlatformClient` protocol in `integrations/base.py`. Adapters only — no business logic here.
+- **`integrations/`**: External platform clients (Google Meet, Zoom). Implement the `CallPlatformClient` protocol in `integrations/base.py`. Adapters only — no business logic here.
 - **`workers/`**: Background job hooks (meeting bots, transcription, summarization). Currently process-local placeholders; swap call sites to a queue (Celery/ARQ) later without touching services.
 
 **Transaction policy**: repositories flush but never commit. `get_db` in `api/deps.py` commits on request success and rolls back on any exception. Services can therefore compose multiple repo calls atomically.
 
-**Dependency injection**: everything is wired through `Annotated[..., Depends(...)]` aliases in `api/deps.py` (`SessionDep`, `CacheDep`, `MeetingServiceDep`, ...). In tests, override the dependency with `app.dependency_overrides[...]`.
+**Dependency injection**: everything is wired through `Annotated[..., Depends(...)]` aliases in `api/deps.py` (`SessionDep`, `CacheDep`, `CallServiceDep`, ...). In tests, override the dependency with `app.dependency_overrides[...]`.
 
 ## Adding a new feature (e.g. `transcripts`)
 
@@ -60,7 +60,7 @@ api/  ->  services/  ->  repositories/  ->  models (SQLAlchemy)
 6. Migration: `make makemigrations m="add transcripts"` (requires DB up)
 7. Tests mirroring the layout: `tests/api/test_transcripts.py`, `tests/services/test_transcript_service.py`
 
-Use the existing Meetings feature (`models/meeting.py` → `api/v1/meetings.py`) as the reference pattern.
+Use the existing Calls feature (`models/call.py` → `api/v1/calls.py`) as the reference pattern.
 
 ## Conventions
 

@@ -1,10 +1,8 @@
 from typing import Any
 
-from oreeai_notetaker.enums import MeetingPlatform
-
 
 class ZoomClient:
-    platform = MeetingPlatform.zoom
+    platform: str = "zoom"
 
     async def fetch_meeting(self, external_id: str) -> dict[str, Any]:
         raise NotImplementedError("Zoom integration is not implemented yet")
