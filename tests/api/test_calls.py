@@ -150,6 +150,13 @@ async def test_post_call_rejects_wrong_api_key(client: AsyncClient) -> None:
     assert response.status_code == 401
 
 
+async def test_post_call_rejects_non_ascii_api_key(client: AsyncClient) -> None:
+    response = await client.post(
+        CALLS_URL, json=call_payload(), headers={"X-API-Key": b"k\xeb-unicode"}
+    )
+    assert response.status_code == 401
+
+
 async def test_get_call_rejects_wrong_api_key(
     client: AsyncClient, auth_headers: dict[str, str]
 ) -> None:

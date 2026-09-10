@@ -5,11 +5,14 @@ from httpx import AsyncClient
 from sqlalchemy.exc import SQLAlchemyError
 
 from oreeai_notetaker.api.deps import get_db
+from oreeai_notetaker.core.cache import CacheService
+
+HEARTBEAT_KEY = "oreeai:runner:heartbeat"
 
 
 async def _seed_heartbeat(app: FastAPI) -> None:
-    key = app.state.cache.key("runner", "heartbeat")
-    await app.state.cache.set_json(key, "2026-09-10T00:00:00Z")
+    cache: CacheService = app.state.cache
+    await cache.set(cache.key("runner", "heartbeat"), "2026-09-10T00:00:00Z", ttl=60)
 
 
 async def test_health_requires_api_key(client: AsyncClient) -> None:
@@ -19,6 +22,11 @@ async def test_health_requires_api_key(client: AsyncClient) -> None:
 
 async def test_health_rejects_wrong_key(client: AsyncClient) -> None:
     response = await client.get("/api/v1/health", headers={"X-API-Key": "wrong-key"})
+    assert response.status_code == 401
+
+
+async def test_health_rejects_non_ascii_key(client: AsyncClient) -> None:
+    response = await client.get("/api/v1/health", headers={"X-API-Key": b"k\xeb-unicode"})
     assert response.status_code == 401
 
 
@@ -32,6 +40,7 @@ async def test_health_returns_ok(
     body = response.json()
     assert body["status"] == "ok"
     assert body["components"]["database"] == "up"
+    assert body["components"]["cache"] == "up"
     assert body["components"]["runner"] == "up"
 
 
@@ -43,7 +52,21 @@ async def test_health_returns_503_when_runner_down(
     body = response.json()
     assert body["status"] == "degraded"
     assert body["components"]["database"] == "up"
+    assert body["components"]["cache"] == "up"
     assert body["components"]["runner"] == "down"
+
+
+async def test_health_runner_unknown_when_cache_down(
+    app: FastAPI, client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    app.state.cache = CacheService(None)
+
+    response = await client.get("/api/v1/health", headers=auth_headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["components"]["cache"] == "down"
+    assert body["components"]["runner"] == "unknown"
 
 
 async def test_health_returns_503_when_database_down(

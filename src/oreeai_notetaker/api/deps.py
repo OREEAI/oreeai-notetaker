@@ -55,7 +55,9 @@ async def require_api_key(
     request: Request,
     x_api_key: Annotated[str | None, Header()] = None,
 ) -> None:
-    if x_api_key is None or not secrets.compare_digest(x_api_key, settings.api_key):
+    if x_api_key is None or not secrets.compare_digest(
+        x_api_key.encode(), settings.api_key.encode()
+    ):
         client_ip = request.client.host if request.client else "unknown"
         logger.warning("rejected X-API-Key from %s", client_ip)
         raise HTTPException(

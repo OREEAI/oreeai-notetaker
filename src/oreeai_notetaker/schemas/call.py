@@ -21,7 +21,7 @@ class CallCreate(BaseModel):
     consent_ack: bool = False
     webhook_url: HttpUrl
     webhook_secret: str = Field(min_length=MIN_WEBHOOK_SECRET_LENGTH)
-    platform: CallPlatform = CallPlatform.google_meet
+    platform: CallPlatform | None = None
 
     @field_validator("meeting_url")
     @classmethod
@@ -34,6 +34,14 @@ class CallCreate(BaseModel):
     def _require_consent(self) -> "CallCreate":
         if not self.consent_ack:
             raise PydanticCustomError("consent_missing", "consent_missing")
+        return self
+
+    @model_validator(mode="after")
+    def _derive_platform(self) -> "CallCreate":
+        if self.platform is None:
+            self.platform = CallPlatform.google_meet
+        elif self.platform != CallPlatform.google_meet:
+            raise PydanticCustomError("invalid_meeting_url", "invalid_meeting_url")
         return self
 
 

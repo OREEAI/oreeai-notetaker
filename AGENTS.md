@@ -43,7 +43,7 @@ api/  ->  services/  ->  repositories/  ->  models (SQLAlchemy)
 - **`enums/`**: Shared `StrEnum` types (e.g. `CallPlatform`, `CallStatus`) referenced across models, schemas, services, and integrations. Never define an enum inside `models/` if anything outside the model layer needs it — put it here, one file per domain (`enums/call.py`), re-exported in `enums/__init__.py`.
 - **`schemas/`**: Pydantic DTOs. `*Create`, `*Update` (all-optional patch semantics via `model_dump(exclude_unset=True)`), `*Read` (with `from_attributes`).
 - **`core/`**: Cross-cutting: `config.py` (pydantic-settings; add new env vars here), `cache.py` (`CacheService`, Redis-backed, degrades gracefully to no-op when Redis is down), `exceptions.py` (`AppError` subclasses are mapped to HTTP responses automatically in `main.py`).
-- **`integrations/`**: External platform clients (Google Meet, Zoom). Implement the `CallPlatformClient` protocol in `integrations/base.py`. Adapters only — no business logic here.
+- **`integrations/`**: External platform clients (Google Meet; Zoom returns in phase 2). Implement the `CallPlatformClient` protocol in `integrations/base.py`. Adapters only — no business logic here.
 - **`workers/`**: Background job hooks (meeting bots, transcription, summarization). Currently process-local placeholders; swap call sites to a queue (Celery/ARQ) later without touching services.
 
 **Transaction policy**: repositories flush but never commit. `get_db` in `api/deps.py` commits on request success and rolls back on any exception. Services can therefore compose multiple repo calls atomically.

@@ -4,7 +4,7 @@ from typing import Any
 from oreeai_notetaker.core.cache import CacheService
 from oreeai_notetaker.core.config import settings
 from oreeai_notetaker.core.exceptions import ConflictError, NotFoundError
-from oreeai_notetaker.enums import CallStatus
+from oreeai_notetaker.enums import CallPlatform, CallStatus
 from oreeai_notetaker.models.call import Call
 from oreeai_notetaker.repositories.call import CallRepository
 from oreeai_notetaker.schemas.call import CallCreate, CallRead
@@ -37,7 +37,7 @@ class CallService:
             meeting_url=data.meeting_url,
             user_ref=data.user_ref,
             consent_ack=data.consent_ack,
-            platform=data.platform,
+            platform=data.platform or CallPlatform.google_meet,
             status=CallStatus.queued,
             webhook_url=str(data.webhook_url),
             webhook_secret=data.webhook_secret,
