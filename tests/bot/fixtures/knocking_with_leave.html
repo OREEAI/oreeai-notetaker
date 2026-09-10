@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Meet - abc-defg-hij</title></head>
+<body>
+<main>
+<!-- Representative DOM for the 2026-09-09 admission-wait variant (PR 4
+     manual-run evidence, bot-debug3/debug4 page-text captures): the knock
+     page says "Please wait until a meeting host brings you into the call"
+     and renders its own "Leave call" control next to it, so admission
+     detection must key on this waiting text and must not treat the leave
+     button alone as admission. The older "Asking to be let in" variant is
+     covered by knocking.html. -->
+<h1>Please wait until a meeting host brings you into the call</h1>
+<p>You will be able to join when someone lets you in.</p>
+<button type="button" role="button" aria-label="Leave call">Leave call</button>
+<section>
+<p>Messages from the host</p>
+<p>Close chat</p>
+</section>
+</main>
+</body>
+</html>

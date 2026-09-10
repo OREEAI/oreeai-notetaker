@@ -72,15 +72,18 @@ def is_in_waiting_room(
     """Whether the page is still waiting for admission.
 
     The waiting room includes both the pre-join green room and the
-    post-click admission-wait screen. An admitted call is never a waiting
-    room, even if one of these controls is unexpectedly still visible.
+    post-click admission-wait screen. Meet's admission-wait page also
+    renders a "Leave call" control so the knocker can back out, so the
+    knocking indicator (either of its known wordings) is checked first: as
+    long as it is visible, the bot is waiting — no leave control can
+    override that.
     """
-    if selector_set.leave_call_button(page, timeout_ms=_POLL_TIMEOUT_MS) is not None:
-        return False, "leave control visible; not in waiting room"
-
     knocking = selector_set.knocking_indicator(page, timeout_ms=_POLL_TIMEOUT_MS)
     if knocking is not None:
         return True, f"waiting for admission: {_locator_detail(knocking)}"
+
+    if selector_set.leave_call_button(page, timeout_ms=_POLL_TIMEOUT_MS) is not None:
+        return False, "leave control visible; not in waiting room"
 
     name_field = selector_set.name_input(page, timeout_ms=_POLL_TIMEOUT_MS)
     if name_field is not None:
@@ -94,7 +97,14 @@ def is_in_waiting_room(
 
 
 def is_admitted(page: Page, selector_set: SelectorSet = _DEFAULT_SELECTOR_SET) -> tuple[bool, str]:
-    """Whether the bot has entered the call."""
+    """Whether the bot has entered the call.
+
+    Meet's admission-wait page renders its own "Leave call" control next to
+    the knocking text, so the leave button alone is not admission evidence:
+    while the knocking indicator is visible the bot is still outside.
+    """
+    if selector_set.knocking_indicator(page, timeout_ms=_POLL_TIMEOUT_MS) is not None:
+        return False, "still knocking (admission pending)"
     if selector_set.leave_call_button(page, timeout_ms=_POLL_TIMEOUT_MS) is not None:
         return True, "in call: leave control visible"
     return False, "leave control absent"

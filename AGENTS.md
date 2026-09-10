@@ -21,6 +21,8 @@ make format           # ruff autofix + format
 make typecheck        # mypy strict; src/ today, src/ + bot/ once PR 1 lands
 make makemigrations m="add x"   # autogenerate alembic migration (needs DB running)
 make migrate          # alembic upgrade head
+make bot-probe          # in-container browser probe (launch config + fingerprint)
+make bot-runner         # precursor orchestrator: N=3 ceiling + resource envelope
 make docker-up        # postgres + redis + api via docker compose
 make docker-down
 make docker-logs
@@ -67,6 +69,7 @@ Use the existing Meetings feature (`models/meeting.py` → `api/v1/meetings.py`)
 - Tests run on in-memory SQLite via fixtures in `tests/conftest.py`; no external services required
 - Config comes from environment variables (see `.env.example`); never hardcode credentials; never commit `.env`
 - Logging via stdlib `logging` (`setup_logging` in `core/logging.py`); no print statements
+- **Manual scenarios get automated mirrors:** every PR ships automated equivalents of its "You test this" scenarios wherever CI allows them — pure unit tests plus `docker`-marked integration tests (`tests/`, registered in `pyproject.toml`; skip cleanly when no daemon or required image is present). What inherently stays human (real Meet behavior, host-level OOM effects, VPS ops) is listed explicitly in the chunk's runbook, and the PR body carries the triage. See `tests/bot/test_runner*.py` for the two-tier pattern.
 
 ## Git workflow
 

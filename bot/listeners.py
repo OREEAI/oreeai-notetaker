@@ -401,16 +401,29 @@ def run_call_loop(
                     logger.info("%s", count_detail)
                     next_unknown_evidence = now + UNKNOWN_ROOM_EVIDENCE_INTERVAL_S
         else:
-            missed_leave += 1
-            if missed_leave >= ENDED_CONFIRMATION_POLLS:
-                debug_screenshot(page, "in-call controls gone")
-                reason = f"in-call indicators gone for {missed_leave} polls; treating as call ended"
-                try:
-                    recorder.stop()
-                    logger.info("recording stopped")
-                finally:
-                    _log_transition(call_id, phase, "call_ended", reason)
-                logger.info("%s", reason)
-                return BotOutcome(EXIT_OK, "call_ended", reason, recording_started=True)
+            if selectors.leave_call_button(page, timeout_ms=0) is not None:
+                # Contradictory evidence mid-call: the knocking text can also
+                # ride in on in-call copy (a participant-knock notification,
+                # chat, captions). The leave control says we are still in the
+                # call — trust it and keep recording.
+                logger.warning(
+                    "knocking text visible mid-call while the leave control is "
+                    "present; staying in the call"
+                )
+                missed_leave = 0
+            else:
+                missed_leave += 1
+                if missed_leave >= ENDED_CONFIRMATION_POLLS:
+                    debug_screenshot(page, "in-call controls gone")
+                    reason = (
+                        f"in-call indicators gone for {missed_leave} polls; treating as call ended"
+                    )
+                    try:
+                        recorder.stop()
+                        logger.info("recording stopped")
+                    finally:
+                        _log_transition(call_id, phase, "call_ended", reason)
+                    logger.info("%s", reason)
+                    return BotOutcome(EXIT_OK, "call_ended", reason, recording_started=True)
 
         page.wait_for_timeout(int(poll_interval_s * 1000))

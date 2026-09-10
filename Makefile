@@ -11,7 +11,7 @@ export BOT_WAITING_ROOM_TIMEOUT BOT_EMPTY_ROOM_TIMEOUT BOT_ALONE_GRACE
 export BOT_MAX_RECORD_DURATION BOT_SILENCE_RMS_FLOOR
 export CONSENT_ACK ENVIRONMENT
 
-.PHONY: setup dev test lint format typecheck makemigrations migrate downgrade docker-up docker-down docker-logs docker-rebuild bot-build bot-run bot-probe clean
+.PHONY: setup dev test lint format typecheck makemigrations migrate downgrade docker-up docker-down docker-logs docker-rebuild bot-build bot-run bot-probe bot-runner clean
 
 setup:
 	$(UV) sync
@@ -99,6 +99,24 @@ TZ ?= Africa/Lagos
 
 bot-probe: bot-build
 	docker run --rm --shm-size=1g $(GPU_FLAGS) -e TZ=$(TZ) --entrypoint bash oreeai-bot:local -c 'Xvfb :99 -screen 0 2400x1350x24 -nolisten tcp & sleep 1; export XDG_RUNTIME_DIR=/tmp/runtime-$$(id -u); mkdir -p $$XDG_RUNTIME_DIR; pulseaudio --start --exit-idle-time=-1 --disable-shm; pactl load-module module-null-sink sink_name=virtual_speaker >/dev/null; pactl load-module module-remap-source master=virtual_speaker.monitor source_name=virtual_mic >/dev/null; DISPLAY=:99 python -m bot.probe_browser'
+
+# Precursor orchestrator (PR 4): interactive join/status/quit loop plus an
+# optional JSONL queue file, enforcing the N=3 concurrency ceiling with the
+# bot/docker-compose.yml resource envelope. Subsumed by PR 5's DB-driven
+# runner (workers/bot_runner.py) — see bot/README.
+#
+# Local-dev path defaults: runner.py's built-in defaults are the production
+# paths (/var/lib/oreeai/...); override per host via .env or the command
+# line, e.g. make bot-runner AUDIO_HOST_PATH=/var/lib/oreeai/audio. The
+# ceiling itself comes from CALL_CONCURRENCY_LIMIT (default 3).
+CALL_CONCURRENCY_LIMIT ?= 3
+AUDIO_HOST_PATH ?= $(CURDIR)/bot/audio
+RUNNER_LOCK_PATH ?= $(CURDIR)/bot/runner.lock
+export AUDIO_HOST_PATH RUNNER_LOCK_PATH BOT_PROFILE DEBUG_HOST_PATH RUNNER_QUEUE_FILE TZ
+
+bot-runner: bot-build
+	mkdir -p $(AUDIO_HOST_PATH) $(dir $(RUNNER_LOCK_PATH)) && chmod 777 $(AUDIO_HOST_PATH)
+	$(UV) run python -m bot.runner --concurrency $(CALL_CONCURRENCY_LIMIT)
 
 clean:
 	rm -rf .venv .pytest_cache .mypy_cache .ruff_cache dist build *.egg-info

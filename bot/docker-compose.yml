@@ -1,0 +1,57 @@
+# Bot container resource envelope (PR 4 — safety limits).
+#
+# Separate from the dev docker-compose.yml (api/db/redis) on purpose: the
+# bot's resource envelope must be obvious and reviewable on its own. The
+# precursor orchestrator (bot/runner.py) spawns via `docker run` and MUST
+# mirror these exact numbers — tests/bot/test_runner.py locks the two
+# artifacts together so they cannot drift.
+#
+# PR 5 adds the `bot-runner` service (the DB-driven orchestrator with the
+# docker socket mounted) to this file. The API process never gets the socket.
+#
+# Standing rule: production compose never publishes ports to 0.0.0.0. The bot
+# has no inbound surface at all — no `ports:`, and `expose:` is unused.
+#
+# Usage (single bot container, image built by `make bot-build`):
+#   MEETING_URL=https://meet.google.com/xxx-xxxx-xxx \
+#   docker compose -f bot/docker-compose.yml up --no-attach bot
+# Real runs are normally driven by the runner (make bot-runner), not by hand.
+services:
+  bot:
+    image: oreeai-bot:local
+    # Chromium dies on the default 64 MB /dev/shm (PR 1 trap flag 3), and
+    # --init makes SIGTERM reach the right process so WAVs finalize on stop.
+    # These are runnability pins, not part of the chunk's limit list.
+    init: true
+    shm_size: 1g
+    # --- resource envelope (pinned; the runner passes the identical flags) ---
+    mem_limit: 2g
+    cpus: "1.5"
+    pids_limit: 512
+    # Bounded retries only. NEVER `restart: always` — a memory-bombed or
+    # crash-looping bot must stay down instead of burning a slot forever.
+    # `on-failure:2` is the compose spelling of max_attempts: 2.
+    restart: on-failure:2
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # --- volume (host path convention; PR 5 mounts the docker socket on the
+    # runner service, never here) ---
+    volumes:
+      - "/var/lib/oreeai/audio:/audio"
+      # Authenticated mode only (BOT_AUTH_MODE=authenticated): the persistent
+      # Chrome profile holds the Google session — treat it like a password;
+      # never log or commit this path. Anonymous runs can drop this mount.
+      - "/var/lib/oreeai/chrome-profile:/profile"
+    environment:
+      MEETING_URL: ${MEETING_URL:?MEETING_URL is required}
+      CALL_ID: ${CALL_ID:-manual}
+      # Operator-level consent attestation; the API-level gate lands in PR 5.
+      CONSENT_ACK: "true"
+      BOT_AUTH_MODE: ${BOT_AUTH_MODE:-anonymous}
+      BOT_PROFILE_DIR: ${BOT_PROFILE_DIR:-/profile}
+      ENVIRONMENT: ${ENVIRONMENT:-local}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      TZ: ${TZ:-Africa/Lagos}
