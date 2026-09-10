@@ -1,7 +1,8 @@
 # ruff: noqa: E402
 import os
 
-os.environ.setdefault("API_KEY", "test-api-key")
+if not os.environ.get("API_KEY"):
+    os.environ["API_KEY"] = "test-api-key"
 
 from collections.abc import AsyncIterator
 from typing import Any
@@ -10,6 +11,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import StaticPool
 
 from oreeai_notetaker.api.deps import get_db
 from oreeai_notetaker.core.cache import CacheService
@@ -19,14 +21,23 @@ from oreeai_notetaker.main import create_app
 
 
 @pytest.fixture
-async def db_session() -> AsyncIterator[AsyncSession]:
-    engine = create_async_engine("sqlite+aiosqlite://")
+async def db_engine() -> AsyncIterator[Any]:
+    engine = create_async_engine(
+        "sqlite+aiosqlite://",
+        poolclass=StaticPool,
+        connect_args={"check_same_thread": False},
+    )
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    yield engine
+    await engine.dispose()
+
+
+@pytest.fixture
+async def db_session(db_engine: Any) -> AsyncIterator[AsyncSession]:
+    session_factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with session_factory() as session:
         yield session
-    await engine.dispose()
 
 
 class FakeRedis:

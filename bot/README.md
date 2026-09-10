@@ -1,4 +1,4 @@
-# OreeAI Meet bot (PRs 2–4 — join lifecycle + consent + safety limits)
+# OreeAI Meet bot (PRs 2–5 — join lifecycle + consent + safety limits + service)
 
 A container that joins a real Google Meet call, tracks the call
 through every real-world lifecycle state, records meeting audio to a WAV
@@ -9,7 +9,9 @@ silent-capture detection explicit and testable; PR 3 makes the bot a
 **visibly consenting recorder** (fixed name + in-call chat announcement)
 that refuses to start without an explicit `CONSENT_ACK`; PR 4 puts a hard
 resource envelope, an N=3 concurrency ceiling, and a reconcile-on-restart
-lockfile around every run ([Runner and safety limits](#runner-and-safety-limits-pr-4)).
+lockfile around every run. PR 5 removed the precursor lockfile runner:
+spawning is owned by the DB-driven runner in the service package
+([Runner and orchestration](#runner-and-orchestration-pr-5)).
 
 The bot is a **separate deployable**. It must never import `oreeai_notetaker`, and
 the service must never import `bot/`. The only contract between them is the
@@ -133,31 +135,40 @@ Chrome incognito output to rank what still distinguishes the automated
 client. Re-run it after any Dockerfile
 or launch-config change, before spending a manual gate run on it.
 
-## Runner and safety limits (PR 4)
+## Runner and orchestration (PR 5)
 
-**Precursor — do not extend.** `bot/runner.py` is PR 4's stopgap
-orchestrator so the resource envelope and concurrency ceiling exist
-*before* any real scale. PR 5 replaces it with the DB-driven runner
-(`workers/bot_runner.py` in the service package, per the orchestration
-architecture in the plan doc): it polls `Call` rows, maps bot exit codes
-through the shared-contracts table, and keeps active counts in Postgres
-instead of a lockfile. If behavior is missing here, port it there — do not
-grow this file. Nothing in `runner.py` imports `oreeai_notetaker` (stdlib
-only), and the docker socket lives with the runner, never the API process.
+The bot is spawned by the **DB-driven runner** in the service package:
+`workers/bot_runner.py`, run as `python -m oreeai_notetaker.workers.bot_runner`
+(dev: `make bot-runner`). It polls `Call` rows (2 s), claims work with
+`SELECT ... FOR UPDATE SKIP LOCKED`, re-checks the
+`CALL_CONCURRENCY_LIMIT` ceiling and free disk before each spawn, streams
+bot output tagged with `call_id`, maps bot exit codes through the
+shared-contracts table, heartbeats Redis every 10 s
+(`oreeai:runner:heartbeat`), sweeps orphans on startup and stale calls
+every 60 s, and fires the signed webhook on every terminal transition.
+The PR 4 precursor (`bot/runner.py`, lockfile-based) is deleted; its
+spawn envelope survives unchanged in the service runner and in
+`bot/docker-compose.yml`, locked together by
+`tests/workers/test_bot_runner.py` so the two artifacts cannot drift.
+
+The docker socket is mounted on the `bot-runner` compose service (in this
+file and the dev `docker-compose.yml`) and **nowhere else** — the API
+process never gets it. Exactly one runner instance is the supported
+configuration; `SKIP LOCKED` makes a second instance harmless but
+unsupported.
 
 ### Resource envelope
 
 Every bot container gets exactly these limits. `bot/docker-compose.yml`
-documents the envelope and `bot/runner.py` passes the identical
-`docker run` flags; `tests/bot/test_runner.py` asserts both artifacts
-carry the same numbers so they cannot drift apart.
+documents the envelope and the runner passes the identical
+`docker run` flags.
 
 | Limit | Value | Why |
 |---|---|---|
 | Memory | `2g` | Headful Chrome + Xvfb + PulseAudio with headroom. If recordings ever fail near the cap, tune *this* — it's the one marked "tune later". |
 | CPUs | `1.5` | A bot must never starve a neighbor (Postgres/Redis) of CPU. |
 | PIDs | `512` | Browsers love to fork; measured ~40 in-container, so 512 is comfortable headroom. |
-| Restart | `on-failure:2` | **Never `always`.** A memory-bombed or crash-looping bot stays down after 2 bounded attempts instead of burning a slot forever. |
+| Restart | `on-failure:2` (compose; runner spawns use `--rm` and no restart flag — the engine forbids the combination, and the streaming runner owns the exit) | **Never `always`.** A memory-bombed or crash-looping bot stays down. |
 | Logs | `json-file`, 10m × 3 | Chromium is chatty; bot logs must never fill the host disk. |
 | Ports | none | No inbound surface at all. Production compose publishes nothing to 0.0.0.0 (standing rule). |
 
@@ -165,68 +176,20 @@ An OOM-killed bot (exit 137) takes only itself down. Swap is the
 pressure buffer that keeps the kernel from aiming at the wrong process —
 one-time VPS setup in [`ops/swap.md`](../ops/swap.md).
 
-### Concurrency ceiling (N=3)
-
-The runner tracks active call ids in a JSON lockfile
-(`/var/lib/oreeai/runner.lock` on the VPS; the Makefile defaults it to
-`bot/runner.lock` locally). Requests past `CALL_CONCURRENCY_LIMIT`
-(default 3) are refused with a clear `concurrency limit reached (3/3
-active)` error and **no container is created**. A reconcile pass runs on
-startup and every 2 s: lockfile entries whose containers exited (OOM,
-clean end) or vanished (operator cleanup, or the runner itself SIGKILLed
-with no chance to unregister) are reaped — the runner removes the finished
-containers as it goes, so slots free without operator intervention.
-(Runner-spawned containers carry no `--rm`: the docker engine forbids it
-alongside a restart policy, and the bounded restart is safety-critical.
-`make bot-run` keeps `--rm` — it never sets a restart policy.) The lockfile
-is process-local to the runner — exactly one runner instance may run, and
-this is enforced: a second start takes an flock hold on
-`<lock>.hold` and exits 1 with `another runner instance is already
-running` when it's taken. The startup reconcile is what makes a crash or
-SIGKILL safe.
-
-```bash
-make bot-runner                                 # interactive: join <MEETING_URL> | status | quit
-make bot-runner CALL_CONCURRENCY_LIMIT=2        # per-host ceiling override
-make bot-runner RUNNER_QUEUE_FILE=queue.jsonl   # also drain a JSONL request queue
-```
-
-Queue requests are one JSON object per line:
-`{"meeting_url": "...", "call_id": "optional", "env": {"BOT_AUTH_MODE": "..."},
-"profile": "/path/to/chrome-profile", "command": ["test-only cmd override"]}`.
-`env` beats ambient env per request; `command` exists only for docker-level
-tests (real runs use the shipped entrypoint). Refused and malformed
-requests are appended to `<queue>.rejected` so nothing is silently dropped.
-
 **Consent:** the runner passes `CONSENT_ACK=true` to every container it
-spawns — an *operator-level* attestation by whoever queues the call. The
-API-level consent gate lands in PR 5 (`POST /calls`); the bot's own
-exit-6 rule is untouched.
+spawns — an operator-level attestation by whoever queues the call. The
+API-level gate is live since PR 5: `POST /calls` requires
+`consent_ack: true` (else 422 `consent_missing`); the bot's own exit-6
+rule is untouched.
 
-**Concurrent authenticated bots must not share one Chrome profile** — the
-`SingletonLock` breaks every container but the first. For N simultaneous
-runs, copy the profile (`cp -a bot/chrome-profile bot/copy-2`) and give
-each request its own `profile` path.
+**Concurrent authenticated bots:** the runner copies the persistent
+profile per call (Chrome's `SingletonLock` forbids two live browsers on
+one profile dir) into the audio volume, mounts the copy, and deletes it
+when the bot exits — the original profile dir is never locked by a
+browser.
 
-### Scenario coverage (PR 4)
-
-The manual "You test this" scenarios have automated mirrors:
-`tests/bot/test_runner.py` (pure logic — envelope pins, ceiling refusal,
-reconcile planning, lockfile, single-instance hold) runs everywhere;
-`tests/bot/test_runner_docker.py` (docker marker; needs a daemon — present
-in CI, so the suite runs there too; skips cleanly when absent; no Meet and
-no bot image) mirrors spawn-and-inspect the real limits,
-hold-3-refuse-the-4th, and reconcile-after-kill:
-
-```bash
-uv run pytest tests/bot/test_runner.py          # pure logic, no docker
-uv run pytest tests/bot/test_runner_docker.py   # real containers (daemon needed)
-uv run pytest -m "not docker"                   # daemon-less machines: logic lane only
-RUNNER_BOMB_TEST=1 uv run pytest tests/bot/test_runner_docker.py  # + the OOM-bomb mirror
-```
-
-Still human-only: what Meet does with the bot (waiting rooms, walls),
-host-level `dmesg` evidence around an OOM-kill, and the VPS swap run.
+**Still human-only:** what Meet does with the bot (waiting rooms, walls),
+and host-level `dmesg` evidence around an OOM-kill.
 
 ## Consent
 

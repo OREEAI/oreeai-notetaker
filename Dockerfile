@@ -16,6 +16,17 @@ RUN uv sync --frozen --no-dev
 
 FROM python:3.13-slim-bookworm AS runtime
 
+# docker CLI only (no daemon): the bot-runner service drives bot containers
+# through the mounted host socket. The API process never gets that socket.
+RUN apt-get update \
+    && install -m 0755 -d /etc/apt/keyrings \
+    && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+    && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bookworm stable" > /etc/apt/sources.list.d/docker.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends docker-ce-cli \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd --system app && useradd --system --gid app --create-home app
 
 WORKDIR /app

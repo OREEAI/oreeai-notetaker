@@ -48,10 +48,49 @@ services:
     environment:
       MEETING_URL: ${MEETING_URL:?MEETING_URL is required}
       CALL_ID: ${CALL_ID:-manual}
-      # Operator-level consent attestation; the API-level gate lands in PR 5.
+      # Operator-level consent attestation; the API-level gate (consent_ack on
+      # POST /calls) landed in PR 5 — this remains the bot's own last resort.
       CONSENT_ACK: "true"
       BOT_AUTH_MODE: ${BOT_AUTH_MODE:-anonymous}
       BOT_PROFILE_DIR: ${BOT_PROFILE_DIR:-/profile}
       ENVIRONMENT: ${ENVIRONMENT:-local}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       TZ: ${TZ:-Africa/Lagos}
+
+  # The DB-driven orchestrator (PR 5): polls Call rows, claims with
+  # FOR UPDATE SKIP LOCKED, and spawns `bot` containers with the exact
+  # envelope above. The docker socket is mounted HERE and nowhere else —
+  # the API process never gets it. Runs the service package, so it builds
+  # the repo-root image; the audio volume is mounted at its host path so
+  # spawn mounts and the free-disk pre-check see the same directory.
+  bot-runner:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ["python", "-m", "oreeai_notetaker.workers.bot_runner"]
+    restart: unless-stopped
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "/var/lib/oreeai/audio:/var/lib/oreeai/audio"
+      # Profile dir is mounted read-only: the runner copies it per call
+      # (Chrome SingletonLock forbids sharing one live profile dir) into
+      # the audio volume, which is a host path the spawned bot can mount.
+      - "/var/lib/oreeai/chrome-profile:/var/lib/oreeai/chrome-profile:ro"
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
+      API_KEY: ${API_KEY:?API_KEY is required}
+      ENVIRONMENT: ${ENVIRONMENT:-local}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      AUDIO_HOST_PATH: /var/lib/oreeai/audio
+      BOT_PROFILE: ${BOT_PROFILE:-/var/lib/oreeai/chrome-profile}
+      CALL_CONCURRENCY_LIMIT: ${CALL_CONCURRENCY_LIMIT:-3}
+      BOT_IMAGE_TAG: ${BOT_IMAGE_TAG:-local}
+      BOT_DOCKER_NETWORK: ${BOT_DOCKER_NETWORK:-oreeai_internal}
+      WEBHOOK_HTTP_TIMEOUT: ${WEBHOOK_HTTP_TIMEOUT:-10}
+      WEBHOOK_MAX_ATTEMPTS: ${WEBHOOK_MAX_ATTEMPTS:-5}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
