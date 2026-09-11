@@ -2,6 +2,8 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
@@ -13,6 +15,7 @@ from oreeai_notetaker.core.config import settings
 from oreeai_notetaker.core.exceptions import AppError
 from oreeai_notetaker.core.logging import setup_logging
 from oreeai_notetaker.db.session import engine
+from oreeai_notetaker.schemas.call import CONTRACT_VALIDATION_CODES
 
 
 @asynccontextmanager
@@ -50,6 +53,18 @@ def create_app() -> FastAPI:
     @app.exception_handler(AppError)
     async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.message})
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_error_handler(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        for error in exc.errors():
+            code = str(error.get("type", ""))
+            if code in CONTRACT_VALIDATION_CODES:
+                return JSONResponse(
+                    status_code=422, content={"detail": code, "failure_reason": code}
+                )
+        return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
 
     return app
 

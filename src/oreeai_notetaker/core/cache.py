@@ -21,6 +21,26 @@ class CacheService:
     def key(self, *parts: Any) -> str:
         return f"{settings.cache_prefix}:" + ":".join(str(p) for p in parts)
 
+    async def get(self, key: str) -> str | None:
+        if self._redis is None:
+            return None
+        try:
+            value = await self._redis.get(key)
+        except RedisError:
+            logger.warning("cache get failed for key=%s", key, exc_info=True)
+            return None
+        if value is None:
+            return None
+        return str(value)
+
+    async def set(self, key: str, value: str, ttl: int | None = None) -> None:
+        if self._redis is None:
+            return
+        try:
+            await self._redis.set(key, value, ex=ttl or settings.cache_ttl_seconds)
+        except RedisError:
+            logger.warning("cache set failed for key=%s", key, exc_info=True)
+
     async def get_json(self, key: str) -> Any | None:
         if self._redis is None:
             return None

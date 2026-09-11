@@ -32,11 +32,41 @@ services:
       REDIS_URL: redis://redis:6379/0
       ENVIRONMENT: local
       LOG_LEVEL: INFO
+      API_KEY: ${API_KEY:?API_KEY is required in .env}
     ports:
       - "8000:8000"
     volumes:
       - ./src:/app/src
     command: ["uvicorn", "oreeai_notetaker.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # The DB-driven bot runner (PR 5). The docker socket is mounted HERE and
+  # nowhere else — the api service never gets it. The audio volume is mounted
+  # at its host path so spawn mounts and the free-disk pre-check agree; in dev
+  # the Makefile's bot/audio default maps through AUDIO_HOST_PATH.
+  bot-runner:
+    build: .
+    command: ["python", "-m", "oreeai_notetaker.workers.bot_runner"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-oreeai}:${POSTGRES_PASSWORD:-oreeai}@db:5432/${POSTGRES_DB:-oreeai}
+      REDIS_URL: redis://redis:6379/0
+      API_KEY: ${API_KEY:?API_KEY is required in .env}
+      ENVIRONMENT: local
+      LOG_LEVEL: INFO
+      AUDIO_HOST_PATH: ${AUDIO_HOST_PATH:-/var/lib/oreeai/audio}
+      BOT_PROFILE: ${BOT_PROFILE:-/var/lib/oreeai/chrome-profile}
+      CALL_CONCURRENCY_LIMIT: ${CALL_CONCURRENCY_LIMIT:-3}
+      BOT_IMAGE_TAG: ${BOT_IMAGE_TAG:-local}
+      BOT_DOCKER_NETWORK: ${BOT_DOCKER_NETWORK:-oreeai_internal}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${AUDIO_HOST_PATH:-/var/lib/oreeai/audio}:/var/lib/oreeai/audio
+      - ${BOT_PROFILE:-/var/lib/oreeai/chrome-profile}:/var/lib/oreeai/chrome-profile:ro
+    restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy

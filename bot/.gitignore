@@ -2,9 +2,5 @@ audio/
 debug/
 chrome-profile/
 *.wav
-runner.lock
-runner.lock.tmp
-runner.lock.hold
-*.rejected
 __pycache__/
 *.pyc

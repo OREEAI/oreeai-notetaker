@@ -20,9 +20,19 @@ async def health(session: SessionDep, cache: CacheDep) -> JSONResponse:
         database = "down"
 
     cache_status = "up" if await cache.ping() else "down"
-    healthy = database == "up"
+    if cache_status == "up":
+        heartbeat = await cache.get(cache.key("runner", "heartbeat"))
+        runner_status = "up" if heartbeat is not None else "down"
+    else:
+        runner_status = "unknown"
+
+    healthy = database == "up" and runner_status != "down"
     payload: dict[str, Any] = {
         "status": "ok" if healthy else "degraded",
-        "components": {"database": database, "cache": cache_status},
+        "components": {
+            "database": database,
+            "cache": cache_status,
+            "runner": runner_status,
+        },
     }
     return JSONResponse(status_code=200 if healthy else 503, content=payload)

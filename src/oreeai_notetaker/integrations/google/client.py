@@ -1,10 +1,10 @@
 from typing import Any
 
-from oreeai_notetaker.enums import MeetingPlatform
+from oreeai_notetaker.enums import CallPlatform
 
 
 class GoogleMeetClient:
-    platform = MeetingPlatform.google_meet
+    platform = CallPlatform.google_meet
 
     async def fetch_meeting(self, external_id: str) -> dict[str, Any]:
         raise NotImplementedError("Google Meet integration is not implemented yet")

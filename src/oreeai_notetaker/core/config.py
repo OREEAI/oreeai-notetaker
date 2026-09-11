@@ -4,7 +4,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        env_ignore_empty=True,
+    )
 
     project_name: str = "oreeai-notetaker"
     environment: str = "local"
@@ -21,6 +26,17 @@ class Settings(BaseSettings):
     cache_enabled: bool = True
     cache_prefix: str = "oreeai"
     cache_ttl_seconds: int = 300
+
+    api_key: str
+    call_concurrency_limit: int = 3
+    bot_image_tag: str = "local"
+    bot_docker_network: str = "oreeai_internal"
+    bot_profile: str = ""
+    bot_max_record_duration: int = 10800
+    audio_host_path: str = "/var/lib/oreeai/audio"
+    webhook_http_timeout: int = 10
+    webhook_max_attempts: int = 5
+    webhook_timestamp_skew: int = 300
 
     cors_origins: list[str] = []
 
