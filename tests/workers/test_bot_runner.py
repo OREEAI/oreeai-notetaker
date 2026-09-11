@@ -205,8 +205,10 @@ class TestExitMapping:
             assert fresh.status == expected_status, (start, exit_code)
             if expected_status == CallStatus.done:
                 assert fresh.end_reason == reason, (start, exit_code)
+                assert fresh.transcript == [], (start, exit_code)
             else:
                 assert fresh.failure_reason == reason, (start, exit_code)
+                assert fresh.transcript is None, (start, exit_code)
             assert fresh.id in dispatched_calls, (start, exit_code)
 
     async def test_clean_exit_from_joining_is_bot_error(self, cache: CacheService) -> None:

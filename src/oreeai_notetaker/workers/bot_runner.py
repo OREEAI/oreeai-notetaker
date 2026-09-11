@@ -295,7 +295,7 @@ async def apply_exit_status(
                     end_reason = "removed"
                 else:
                     end_reason = _result_end_reason(result) or "call_ended"
-                await service.mark_done(call_id, end_reason)
+                await service.mark_done(call_id, end_reason, transcript=[])
                 logger.info(
                     "call %s done (bot exit %s, end_reason=%s)", call_id, exit_code, end_reason
                 )

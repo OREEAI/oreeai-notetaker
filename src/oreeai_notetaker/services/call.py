@@ -83,9 +83,18 @@ class CallService:
         updated = await self._transition(call, CallStatus.processing)
         return CallRead.model_validate(updated)
 
-    async def mark_done(self, call_id: uuid.UUID, end_reason: str) -> CallRead:
+    async def mark_done(
+        self,
+        call_id: uuid.UUID,
+        end_reason: str,
+        *,
+        transcript: list[dict[str, Any]] | None = None,
+    ) -> CallRead:
         call = await self._require_call(call_id)
-        updated = await self._transition(call, CallStatus.done, changes={"end_reason": end_reason})
+        changes: dict[str, Any] = {"end_reason": end_reason}
+        if transcript is not None:
+            changes["transcript"] = transcript
+        updated = await self._transition(call, CallStatus.done, changes=changes)
         return CallRead.model_validate(updated)
 
     async def mark_failed(self, call_id: uuid.UUID, failure_reason: str) -> CallRead:

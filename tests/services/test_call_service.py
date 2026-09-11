@@ -85,6 +85,18 @@ async def test_full_happy_path_transitions(service: CallService) -> None:
     assert done.failure_reason is None
 
 
+async def test_mark_done_writes_transcript_placeholder(
+    service: CallService,
+) -> None:
+    call = await service.create(make_payload())
+    await service.mark_bot_started(call.id, "oreeai-bot-test")
+    await service.mark_recording(call.id)
+    await service.mark_processing(call.id)
+    done = await service.mark_done(call.id, "call_ended", transcript=[])
+    assert done.status == CallStatus.done
+    assert done.transcript == []
+
+
 async def test_removed_recording_flows_through_processing(service: CallService) -> None:
     call = await service.create(make_payload())
     await service.mark_bot_started(call.id, "oreeai-bot-test")
