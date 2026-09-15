@@ -13,6 +13,7 @@ the chunk; moto proves the request shape, the HTTP presigned/unauth
 matrix runs against moto's server in ``test_presigned.py``.
 """
 
+import os
 import uuid
 from pathlib import Path
 from unittest.mock import patch
@@ -73,6 +74,23 @@ def test_missing_credentials_raise_configuration_error(
     monkeypatch.setattr(settings, "s3_access_key_id", None)
     with pytest.raises(ConfigurationError, match="S3_ACCESS_KEY_ID"):
         S3ObjectStorageClient.from_settings()
+
+
+def test_probe_key_is_pid_suffixed(s3_env) -> None:
+    # Two processes building concurrently must not share one probe key.
+    captured: dict[str, str] = {}
+
+    adapter = S3ObjectStorageClient.from_settings()
+    original_put = adapter._client.put_object
+
+    def spy(**kwargs: object) -> object:
+        captured["key"] = str(kwargs.get("Key"))
+        return original_put(**kwargs)
+
+    with patch.object(adapter._client, "put_object", side_effect=spy):
+        adapter.startup_sse_probe()
+
+    assert captured["key"].startswith(f".oreeai-startup-probe-{os.getpid()}")
 
 
 def test_unreachable_endpoint_surfaces_as_configuration_error(

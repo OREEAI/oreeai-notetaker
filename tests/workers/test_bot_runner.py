@@ -15,7 +15,10 @@ from oreeai_notetaker.core.cache import CacheService
 from oreeai_notetaker.core.config import settings
 from oreeai_notetaker.db.base import Base
 from oreeai_notetaker.enums import ACTIVE_STATUSES, CallStatus
-from oreeai_notetaker.integrations.object_storage.base import UploadFailed
+from oreeai_notetaker.integrations.object_storage.base import (
+    ConfigurationError,
+    UploadFailed,
+)
 from oreeai_notetaker.models.call import Call
 from oreeai_notetaker.services.storage import reset_object_storage_service
 
@@ -302,6 +305,32 @@ class TestExitMapping:
         assert wav.exists(), "scratch WAV kept as ops evidence on upload failure"
         assert fresh.id in dispatched_calls
         assert storage.uploads == []
+
+    async def test_unguarded_storage_build_failure_marks_failed(
+        self,
+        cache: CacheService,
+        dispatched_calls: list[uuid.UUID],
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """storage=None forces the lazy build; a broken configuration must
+        degrade to upload_failed, never strand the call in processing."""
+        monkeypatch.setattr(settings, "audio_host_path", str(tmp_path))
+        (tmp_path / "stub.wav").write_bytes(b"RIFF")
+        call = await make_call(CallStatus.recording, bot_container_name="oreeai-bot-x")
+        (tmp_path / f"{call.id}.wav").write_bytes(b"RIFF")
+
+        def broken_build() -> Any:
+            raise ConfigurationError("S3_BUCKET is not configured")
+
+        monkeypatch.setattr(br, "build_object_storage_service", broken_build)
+        await br.apply_exit_status(call.id, 0, {"end_reason": "call_ended"}, cache)
+
+        fresh = await get_call(call.id)
+        assert fresh.status == CallStatus.failed
+        assert fresh.failure_reason == "upload_failed"
+        assert fresh.audio_url is None
+        assert fresh.id in dispatched_calls
 
     async def test_missing_wav_marks_failed_upload(
         self,

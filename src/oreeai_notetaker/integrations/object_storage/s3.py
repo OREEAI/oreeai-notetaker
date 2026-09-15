@@ -25,6 +25,7 @@ runner's event loop never waits on it inline.
 
 import asyncio
 import logging
+import os
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast, get_args
@@ -100,14 +101,16 @@ class S3ObjectStorageClient:
 
         The probe writes outside the ``calls/`` layout and is deleted
         afterwards; the delete is best-effort (a failed cleanup leaves a
-        harmless 2-byte object, never an exception).
+        harmless 2-byte object, never an exception). The key is
+        PID-suffixed so two processes building the client concurrently
+        cannot interleave on one key and misread a healthy bucket.
         """
         sse = self._sse
         if sse not in SSE_ALGORITHMS:
             raise ConfigurationError(
                 f"S3_SSE must be one of {', '.join(SSE_ALGORITHMS)}; got {sse!r}"
             )
-        probe_key = ".oreeai-startup-probe"
+        probe_key = f".oreeai-startup-probe-{os.getpid()}"
         try:
             self._client.put_object(
                 Bucket=self._bucket,
