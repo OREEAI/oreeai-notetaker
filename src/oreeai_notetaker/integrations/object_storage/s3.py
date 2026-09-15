@@ -27,9 +27,10 @@ import asyncio
 import logging
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, cast, get_args
 
 import boto3
+from boto3.exceptions import S3UploadFailedError
 from boto3.s3.transfer import TransferConfig
 from botocore.config import Config as BotocoreConfig
 from botocore.exceptions import BotoCoreError, ClientError
@@ -50,6 +51,9 @@ logger = logging.getLogger(__name__)
 
 MULTIPART_THRESHOLD_BYTES = 8 * 1024 * 1024
 MULTIPART_CHUNKSIZE_BYTES = 8 * 1024 * 1024
+
+SseAlgorithm = Literal["AES256", "aws:kms", "aws:kms:dsse", "aws:backup", "aws:fsx"]
+SSE_ALGORITHMS: tuple[str, ...] = get_args(SseAlgorithm)
 
 
 class S3ObjectStorageClient:
@@ -84,7 +88,49 @@ class S3ObjectStorageClient:
                 retries={"max_attempts": 3, "mode": "standard"},
             ),
         )
-        return cls(client, settings.s3_bucket, settings.s3_sse)
+        adapter = cls(client, settings.s3_bucket, settings.s3_sse)
+        adapter.startup_sse_probe()
+        return adapter
+
+    def startup_sse_probe(self) -> None:
+        """Round-trip a tiny sentinel object to verify the bucket honors
+        ``S3_SSE`` — surfacing SSE-unsupported (and unreachable endpoints,
+        bad credentials) as a typed ``ConfigurationError`` at startup, not
+        as a runtime error on the first upload (chunk edge case).
+
+        The probe writes outside the ``calls/`` layout and is deleted
+        afterwards; the delete is best-effort (a failed cleanup leaves a
+        harmless 2-byte object, never an exception).
+        """
+        sse = self._sse
+        if sse not in SSE_ALGORITHMS:
+            raise ConfigurationError(
+                f"S3_SSE must be one of {', '.join(SSE_ALGORITHMS)}; got {sse!r}"
+            )
+        probe_key = ".oreeai-startup-probe"
+        try:
+            self._client.put_object(
+                Bucket=self._bucket,
+                Key=probe_key,
+                Body=b"ok",
+                ServerSideEncryption=cast(SseAlgorithm, sse),
+            )
+            head = self._client.head_object(Bucket=self._bucket, Key=probe_key)
+        except (BotoCoreError, ClientError, OSError) as exc:
+            raise ConfigurationError(
+                f"object storage startup probe failed for bucket {self._bucket}: "
+                "endpoint unreachable, credentials rejected, or SSE unsupported"
+            ) from exc
+        echoed = head.get("ServerSideEncryption")
+        if echoed != self._sse:
+            raise ConfigurationError(
+                f"bucket {self._bucket} did not honor ServerSideEncryption={self._sse} "
+                f"(provider echoed {echoed!r})"
+            )
+        try:
+            self._client.delete_object(Bucket=self._bucket, Key=probe_key)
+        except (BotoCoreError, ClientError, OSError) as exc:
+            logger.warning("startup probe cleanup failed for bucket %s: %s", self._bucket, exc)
 
     async def upload_audio(self, call_id: uuid.UUID, file_path: Path) -> str:
         key = audio_key(call_id)
@@ -101,10 +147,11 @@ class S3ObjectStorageClient:
                     multipart_chunksize=MULTIPART_CHUNKSIZE_BYTES,
                 ),
             )
-        except (BotoCoreError, ClientError, OSError) as exc:
+        except (BotoCoreError, ClientError, S3UploadFailedError, OSError) as exc:
             # Chain the cause (traceback-only, for operators) but keep the
             # raised message key-free: botocore errors embed the object
-            # key, and storage log lines must never carry it.
+            # key, and s3transfer's S3UploadFailedError embeds the local
+            # path AND the key — storage log lines must never carry either.
             raise UploadFailed(f"s3 upload failed for call {call_id}") from exc
         return s3_uri(self._bucket, key)
 

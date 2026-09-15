@@ -341,6 +341,7 @@ class TestExitMapping:
         assert str(call.id) in caplog.text
         assert "user_ref" not in caplog.text
         assert "test-user-1" not in caplog.text
+        assert SECRET not in caplog.text
 
     async def test_clean_exit_from_joining_is_bot_error(self, cache: CacheService) -> None:
         call = await make_call(CallStatus.joining)
