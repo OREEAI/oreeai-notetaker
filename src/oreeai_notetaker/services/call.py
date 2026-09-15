@@ -89,11 +89,14 @@ class CallService:
         end_reason: str,
         *,
         transcript: list[dict[str, Any]] | None = None,
+        audio_url: str | None = None,
     ) -> CallRead:
         call = await self._require_call(call_id)
         changes: dict[str, Any] = {"end_reason": end_reason}
         if transcript is not None:
             changes["transcript"] = transcript
+        if audio_url is not None:
+            changes["audio_url"] = audio_url
         updated = await self._transition(call, CallStatus.done, changes=changes)
         return CallRead.model_validate(updated)
 

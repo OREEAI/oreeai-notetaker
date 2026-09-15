@@ -15,9 +15,47 @@ from oreeai_notetaker.core.cache import CacheService
 from oreeai_notetaker.core.config import settings
 from oreeai_notetaker.db.base import Base
 from oreeai_notetaker.enums import ACTIVE_STATUSES, CallStatus
+from oreeai_notetaker.integrations.object_storage.base import UploadFailed
 from oreeai_notetaker.models.call import Call
+from oreeai_notetaker.services.storage import reset_object_storage_service
 
 SECRET = "shhhhhhhhhhhhhhhh"
+
+
+class FakeStorage:
+    """``ObjectStorageService`` stand-in for the runner seam: records
+    uploads and raises ``UploadFailed`` when flagged (or when the call
+    was never staged, which the real WAV-existence check guards)."""
+
+    def __init__(self) -> None:
+        self.staged: set[uuid.UUID] = set()
+        self.uploads: list[uuid.UUID] = []
+        self.fail = False
+
+    def stage(self, call_id: uuid.UUID) -> None:
+        self.staged.add(call_id)
+
+    def reset(self) -> None:
+        self.staged.clear()
+        self.uploads.clear()
+        self.fail = False
+
+    async def upload_for_call(self, call_id: uuid.UUID, file_path: Path) -> str:
+        if self.fail or call_id not in self.staged:
+            raise UploadFailed(f"s3 upload failed for call {call_id}")
+        self.uploads.append(call_id)
+        return f"s3://test-bucket/calls/{call_id}/audio.wav"
+
+    async def delete_for_call(self, call_id: uuid.UUID) -> None:
+        return None
+
+    async def presigned_url_for_call(self, call_id: uuid.UUID, *, ttl_seconds: int) -> str:
+        return f"file:///scratch/calls/{call_id}/audio.wav"
+
+
+@pytest.fixture
+def storage() -> FakeStorage:
+    return FakeStorage()
 
 
 @pytest.fixture
@@ -35,6 +73,13 @@ async def runner_db() -> AsyncIterator[async_sessionmaker[Any]]:
 @pytest.fixture(autouse=True)
 def patch_runner_db(runner_db: async_sessionmaker[Any], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(br, "session_factory", runner_db)
+
+
+@pytest.fixture(autouse=True)
+def fresh_storage_singleton() -> None:
+    reset_object_storage_service()
+    yield
+    reset_object_storage_service()
 
 
 @pytest.fixture(autouse=True)
@@ -184,7 +229,15 @@ class TestComposeParity:
 
 
 class TestExitMapping:
-    async def test_table(self, cache: CacheService, dispatched_calls: list[uuid.UUID]) -> None:
+    async def test_table(
+        self,
+        cache: CacheService,
+        dispatched_calls: list[uuid.UUID],
+        storage: FakeStorage,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setattr(settings, "audio_host_path", str(tmp_path))
         cases = [
             (CallStatus.recording, 0, {"end_reason": "call_ended"}, CallStatus.done, "call_ended"),
             (CallStatus.recording, 0, {"end_reason": "give_up"}, CallStatus.done, "give_up"),
@@ -199,17 +252,95 @@ class TestExitMapping:
             (CallStatus.recording, 99, None, CallStatus.failed, "bot_error:exit_99"),
         ]
         for start, exit_code, result, expected_status, reason in cases:
+            storage.reset()
             call = await make_call(start, bot_container_name="oreeai-bot-x")
-            await br.apply_exit_status(call.id, exit_code, result, cache)
+            wav = tmp_path / f"{call.id}.wav"
+            if expected_status == CallStatus.done:
+                storage.stage(call.id)
+                wav.write_bytes(b"RIFF")
+            await br.apply_exit_status(call.id, exit_code, result, cache, storage)
             fresh = await get_call(call.id)
             assert fresh.status == expected_status, (start, exit_code)
             if expected_status == CallStatus.done:
                 assert fresh.end_reason == reason, (start, exit_code)
                 assert fresh.transcript == [], (start, exit_code)
+                assert fresh.audio_url == f"s3://test-bucket/calls/{call.id}/audio.wav", (
+                    start,
+                    exit_code,
+                )
+                assert storage.uploads == [call.id], (start, exit_code)
+                assert not wav.exists(), (start, exit_code)  # scratch WAV deleted after upload
             else:
                 assert fresh.failure_reason == reason, (start, exit_code)
                 assert fresh.transcript is None, (start, exit_code)
+                assert fresh.audio_url is None, (start, exit_code)
+                assert storage.uploads == [], (start, exit_code)
             assert fresh.id in dispatched_calls, (start, exit_code)
+
+    async def test_upload_failure_marks_failed(
+        self,
+        cache: CacheService,
+        dispatched_calls: list[uuid.UUID],
+        storage: FakeStorage,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setattr(settings, "audio_host_path", str(tmp_path))
+        call = await make_call(CallStatus.recording, bot_container_name="oreeai-bot-x")
+        storage.stage(call.id)
+        wav = tmp_path / f"{call.id}.wav"
+        wav.write_bytes(b"RIFF")
+        storage.fail = True
+
+        await br.apply_exit_status(call.id, 0, {"end_reason": "call_ended"}, cache, storage)
+
+        fresh = await get_call(call.id)
+        assert fresh.status == CallStatus.failed
+        assert fresh.failure_reason == "upload_failed"
+        assert fresh.audio_url is None
+        assert fresh.transcript is None
+        assert wav.exists(), "scratch WAV kept as ops evidence on upload failure"
+        assert fresh.id in dispatched_calls
+        assert storage.uploads == []
+
+    async def test_missing_wav_marks_failed_upload(
+        self,
+        cache: CacheService,
+        dispatched_calls: list[uuid.UUID],
+        storage: FakeStorage,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setattr(settings, "audio_host_path", str(tmp_path))
+        call = await make_call(CallStatus.recording, bot_container_name="oreeai-bot-x")
+
+        await br.apply_exit_status(call.id, 0, {"end_reason": "call_ended"}, cache, storage)
+
+        fresh = await get_call(call.id)
+        assert fresh.status == CallStatus.failed
+        assert fresh.failure_reason == "upload_failed"
+        assert fresh.audio_url is None
+        assert fresh.id in dispatched_calls
+
+    async def test_upload_failure_logs_never_carry_user_ref(
+        self,
+        cache: CacheService,
+        storage: FakeStorage,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setattr(settings, "audio_host_path", str(tmp_path))
+        call = await make_call(CallStatus.recording, bot_container_name="oreeai-bot-x")
+        storage.stage(call.id)
+        (tmp_path / f"{call.id}.wav").write_bytes(b"RIFF")
+        storage.fail = True
+
+        await br.apply_exit_status(call.id, 0, {"end_reason": "call_ended"}, cache, storage)
+
+        assert str(call.id) in caplog.text
+        assert "user_ref" not in caplog.text
+        assert "test-user-1" not in caplog.text
 
     async def test_clean_exit_from_joining_is_bot_error(self, cache: CacheService) -> None:
         call = await make_call(CallStatus.joining)
@@ -350,12 +481,16 @@ class TestSpawnFlow:
     async def test_run_call_full_flow(
         self, cache: CacheService, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
+        monkeypatch.setattr(settings, "s3_bucket", None)  # local storage fallback
+        monkeypatch.setattr(settings, "environment", "local")
         call = await make_call(CallStatus.joining)
         profile_src = tmp_path / "profile"
         profile_src.mkdir()
         (profile_src / "Cookies").write_text("session")
         audio_dir = tmp_path / "audio"
         audio_dir.mkdir()
+        wav = audio_dir / f"{call.id}.wav"
+        wav.write_bytes(b"RIFF fake wav payload")
         monkeypatch.setattr(settings, "bot_profile", str(profile_src))
         monkeypatch.setattr(settings, "audio_host_path", str(audio_dir))
         seen_profile_dirs: list[str] = []
@@ -383,6 +518,12 @@ class TestSpawnFlow:
         assert copy_dir.parent == audio_dir
         assert copy_dir != profile_src
         assert not copy_dir.exists(), "profile copy removed after exit"
+        # PR 6 seam: scratch WAV uploaded through the local fallback and
+        # deleted; the stored object stays until retention reclaims it.
+        stored = audio_dir / "objects" / f"calls/{call.id}/audio.wav"
+        assert fresh.audio_url == f"file://{stored.resolve()}"
+        assert not wav.exists(), "scratch WAV deleted after upload"
+        assert stored.exists()
 
     async def test_run_call_skips_when_not_joinable(
         self, cache: CacheService, monkeypatch: pytest.MonkeyPatch
@@ -458,9 +599,13 @@ class TestImportBoundary:
             tree = ast.parse(path.read_text())
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
-                    assert all(not a.name.startswith("bot") for a in node.names), path
+                    # The boundary forbids the `bot` package itself — not
+                    # botocore/boto3, which the storage adapters need.
+                    assert all(
+                        a.name != "bot" and not a.name.startswith("bot.") for a in node.names
+                    ), path
                 if isinstance(node, ast.ImportFrom) and node.module:
-                    assert not node.module.startswith("bot"), path
+                    assert node.module != "bot" and not node.module.startswith("bot."), path
 
     def test_no_docker_socket_reference_in_package(self) -> None:
         for path in Path("src/oreeai_notetaker").rglob("*.py"):
