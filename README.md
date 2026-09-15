@@ -69,7 +69,7 @@ A sample listing:
 
 ```bash
 aws s3 ls s3://<bucket>/calls/
-# PRE 018f3c2e-77e1-4c40-9f3f-3ee69c1d0b1a/
+# PRE 018f3c2e-0f3f-4c40-9f3f-3ee69c1d0b1a/
 aws s3 ls s3://<bucket>/calls/018f3c2e-0f3f-4c40-9f3f-3ee69c1d0b1a/
 # 2026-09-15 10:14:02  1351680 audio.wav
 ```
@@ -102,10 +102,11 @@ a presigned URL within the TTL.
 raw audio is a scratch artifact: the moment a call is done, the stored
 object is deleted and the call's `audio_url` is cleared. The webhook
 payload carries the object URI (`s3://...`) as a *snapshot* taken at
-`done` — with immediate retention the object is typically already gone
-if a receiver tries to fetch it later, which is intended. Transcripts
-are retained regardless of audio retention (a separate, longer-lived
-policy; Postgres backups land in PR 8).
+`done` — with immediate retention the object will already be gone if a
+receiver tries to fetch it later (fetch promptly, or treat the audio as
+not part of your contract), which is intended. Transcripts are retained
+regardless of audio retention; how long transcripts are kept is a
+separate product decision, not set by this section.
 
 **Enforcement.** The retention worker (inside the bot-runner process
 for phase 1) runs every 60 seconds and once immediately after each
@@ -156,7 +157,7 @@ mc mb oreeai/<bucket>
 mc anonymous set none oreeai/<bucket>                     # private
 mc encrypt set sse-s3 oreeai/<bucket>                     # requires a KMS (KES or MINIO_KMS_AUTO_KMS=1)
 mc ilm rule add oreeai/<bucket> --prefix "calls/" --expire-days 7
-mc ilm rule add oreeai/<bucket> --expire-abort-incomplete-mupload-days 7
+mc ilm rule add oreeai/<bucket> --expire-abort-incomplete-mupload-days 7   # MinIO's flag name — not a typo
 ```
 
 Cloudflare R2 (no egress fees; lifecycle via dashboard or `wrangler`,
@@ -165,9 +166,9 @@ console/API) follow the same four rules: private, encrypted, expire
 `calls/` objects at `AUDIO_RETENTION_DAYS`, abort incomplete multipart
 uploads.
 
-Note for KMS: `S3_SSE=aws:kms` requires `S3_SSE_KMS_KEY_ID` (an env var
-to be added when first used) and a KMS key at the provider — for phase
-1, `AES256` is enough.
+Note for KMS: the stronger `aws:kms` option additionally requires a
+KMS key at the provider and one more setting (added when that option
+is actually used) — for phase 1, `AES256` is enough.
 
 **Deletion requests.** Explicit per-call deletion (GDPR-style erasure
 beyond the retention policy) is not implemented yet — it needs its own
