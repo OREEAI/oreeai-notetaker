@@ -12,15 +12,19 @@ the concurrency ceiling and free disk race-free against the API, spawns
 the bot container with the PR 4 resource envelope (``--rm``, never a
 restart flag — the streaming wait owns the exit), streams bot output
 tagged with ``call_id``, maps bot exit codes through the shared table,
-writes the placeholder transcript on ``processing -> done`` (PR 6 adds
-the upload, PR 7 the real transcript), heartbeats Redis every 10 s,
-sweeps orphans on startup and stale calls every 60 s, and fires the
-signed webhook on every terminal transition.
+uploads the scratch WAV to object storage between ``processing`` and
+``done`` (PR 6; ``transcript=[]`` still lands at done — PR 7 adds the
+real transcript), heartbeats Redis every 10 s, sweeps orphans on
+startup, stale calls every 60 s, and expired audio every 60 s
+(retention worker, PR 6 — once immediately after each done as well),
+and fires the signed webhook on every terminal transition.
 
 The API process never gets the docker socket; only this runner (and the
 containers it spawns) touches docker. Logs carry call ids and container
 names only — never audio bytes, never recording paths paired with
-``user_ref``, never ``webhook_secret``.
+``user_ref``, never ``webhook_secret``, never the S3 object key in the
+same line as a ``user_ref`` (the storage layer logs none of these at
+all).
 """
 
 import asyncio
@@ -46,9 +50,21 @@ from oreeai_notetaker.core.exceptions import ConflictError
 from oreeai_notetaker.core.logging import setup_logging
 from oreeai_notetaker.db.session import session_factory
 from oreeai_notetaker.enums import TERMINAL_STATUSES, CallStatus
+from oreeai_notetaker.integrations.object_storage.base import (
+    ConfigurationError,
+    UploadFailed,
+)
 from oreeai_notetaker.models.call import Call
 from oreeai_notetaker.repositories.call import CallRepository
 from oreeai_notetaker.services.call import CallService
+from oreeai_notetaker.services.storage import (
+    ObjectStorageService,
+    build_object_storage_service,
+)
+from oreeai_notetaker.workers.retention import (
+    RETENTION_INTERVAL_S,
+    enforce_retention,
+)
 from oreeai_notetaker.workers.webhook_dispatcher import deliver
 
 logger = logging.getLogger("oreeai.runner")
@@ -273,32 +289,39 @@ async def apply_exit_status(
     exit_code: ExitCode,
     result: dict[str, Any] | None,
     cache: CacheService,
+    storage: ObjectStorageService | None = None,
 ) -> None:
+    """Map a bot exit through the shared table.
+
+    Clean exits (0, and 3 = removed mid-call) and the disambiguated
+    exit-7-``alone`` case run the PR 6 storage seam: ``recording ->
+    processing`` commits first (row lock released before network I/O),
+    then the scratch WAV is uploaded, then ``processing -> done`` lands
+    atomically with ``audio_url``, then the local WAV is deleted, then
+    the webhook fires. On upload failure the call is
+    ``failed/upload_failed`` and done is never reached.
+    """
     async with session_factory() as session:
         repo = CallRepository(session)
         service = CallService(repo, cache)
         call = await repo.get(call_id)
         if call is None or call.status in TERMINAL_STATUSES:
             return
+        clean = exit_code in (0, 3) and call.status == CallStatus.recording
+        alone_via_silence = (
+            exit_code == 7
+            and call.status == CallStatus.recording
+            and _result_end_reason(result) == "alone"
+        )
         try:
-            clean = exit_code in (0, 3) and call.status == CallStatus.recording
-            alone_via_silence = (
-                exit_code == 7
-                and call.status == CallStatus.recording
-                and _result_end_reason(result) == "alone"
-            )
             if clean or alone_via_silence:
-                await service.mark_processing(call_id)
                 if alone_via_silence:
                     end_reason = "alone"
                 elif exit_code == 3:
                     end_reason = "removed"
                 else:
                     end_reason = _result_end_reason(result) or "call_ended"
-                await service.mark_done(call_id, end_reason, transcript=[])
-                logger.info(
-                    "call %s done (bot exit %s, end_reason=%s)", call_id, exit_code, end_reason
-                )
+                await service.mark_processing(call_id)
             else:
                 reason = _failure_reason(exit_code, call.status)
                 await service.mark_failed(call_id, reason)
@@ -307,7 +330,118 @@ async def apply_exit_status(
             await session.rollback()
             return
         await session.commit()
+
+    if not (clean or alone_via_silence):
+        await dispatch_webhook(call_id)
+        return
+
+    audio_url = await _upload_call_audio(call_id, cache, storage)
+    if audio_url is None:
+        return  # upload_failed path: already marked failed + webhooked
+    await _finish_done_call(call_id, end_reason, audio_url, cache)
+
+
+async def _upload_call_audio(
+    call_id: uuid.UUID,
+    cache: CacheService,
+    storage: ObjectStorageService | None = None,
+) -> str | None:
+    """Upload the scratch WAV (``AUDIO_HOST_PATH/<call_id>.wav``) to storage.
+
+    Returns the object URI, or ``None`` when the upload did not land:
+    the local WAV is missing (disk died, container crashed) or the
+    adapter raised ``UploadFailed``. Either way the call is marked
+    ``failed/upload_failed`` and webhooked — no re-record loop; the
+    failed-audio retention window owns any storage-side residue. The
+    raised error message is call-id-only (never the object key).
+    """
+    wav_path = Path(settings.audio_host_path) / f"{call_id}.wav"
+    if not wav_path.exists():
+        logger.error("call %s upload failed: local WAV missing", call_id)
+        await _mark_upload_failed(call_id, cache)
+        return None
+    if storage is None:
+        # main() pre-builds the service (fail-fast), so this only triggers
+        # on unguarded call paths (tests, future queue workers) — degrade
+        # to upload_failed instead of stranding the call in processing.
+        try:
+            storage = build_object_storage_service()
+        except ConfigurationError as exc:
+            logger.error("call %s upload failed: storage misconfigured: %s", call_id, exc)
+            await _mark_upload_failed(call_id, cache)
+            return None
+    try:
+        audio_url = await storage.upload_for_call(call_id, wav_path)
+    except UploadFailed as exc:
+        logger.error("call %s upload failed: %s", call_id, exc)
+        await _mark_upload_failed(call_id, cache)
+        return None
+    logger.info("call %s uploaded to object storage", call_id)
+    return audio_url
+
+
+async def _mark_upload_failed(call_id: uuid.UUID, cache: CacheService) -> None:
+    async with session_factory() as session:
+        service = CallService(CallRepository(session), cache)
+        try:
+            await service.mark_failed(call_id, "upload_failed")
+            await session.commit()
+        except ConflictError:
+            await session.rollback()
+            return
     await dispatch_webhook(call_id)
+
+
+async def _finish_done_call(
+    call_id: uuid.UUID,
+    end_reason: str,
+    audio_url: str,
+    cache: CacheService,
+) -> None:
+    """Land ``processing -> done`` with the object URI, then scratch cleanup.
+
+    ``audio_url`` is written atomically with the ``done`` transition; the
+    local WAV is deleted only afterwards — a crash before ``done`` would
+    otherwise strand the call in ``processing`` (the stale sweep does not
+    cover it), while a crash after ``done`` leaves a benign orphan WAV
+    (scratch-space policy, documented in the README's Data retention
+    section).
+    """
+    async with session_factory() as session:
+        service = CallService(CallRepository(session), cache)
+        try:
+            await service.mark_done(call_id, end_reason, transcript=[], audio_url=audio_url)
+            await session.commit()
+        except ConflictError:
+            await session.rollback()
+            return
+    logger.info("call %s done (end_reason=%s)", call_id, end_reason)
+    _delete_local_wav(call_id)
+    await dispatch_webhook(call_id)
+    # Immediate retention (PR 6): fires AFTER the webhook, so build_payload
+    # still saw audio_url and delivered the URI snapshot even when
+    # AUDIO_RETENTION_DAYS=0 deletes the object right away. The sweep is
+    # never-crash (per-row try/except inside), the guard is belt-and-braces.
+    await _run_retention_sweep()
+
+
+async def _run_retention_sweep() -> None:
+    """Best-effort retention call site — never crashes the runner."""
+    try:
+        await enforce_retention()
+    except Exception:
+        logger.exception("retention sweep failed; continuing")
+
+
+def _delete_local_wav(call_id: uuid.UUID) -> None:
+    """Remove the scratch WAV once the object is safely stored (best-effort)."""
+    path = Path(settings.audio_host_path) / f"{call_id}.wav"
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        logger.warning("local WAV cleanup failed for call %s: %s", call_id, exc)
 
 
 def _copy_profile(call_id: uuid.UUID) -> str | None:
@@ -511,6 +645,12 @@ def _prepare_audio_dir() -> bool:
 
 async def main() -> None:
     setup_logging(settings.log_level)
+
+    # Storage selection happens first and fail-fast: a runner that
+    # cannot store audio must not run (ConfigurationError in production
+    # with unset S3 vars; local stand-in elsewhere, which warns loudly).
+    build_object_storage_service()
+
     cache = CacheService(None)
     try:
         client = aioredis.from_url(settings.redis_url, decode_responses=True)
@@ -536,6 +676,7 @@ async def main() -> None:
 
     next_heartbeat = 0.0
     next_stale_sweep = 0.0
+    next_retention = 0.0
     try:
         while True:
             now = asyncio.get_running_loop().time()
@@ -545,6 +686,9 @@ async def main() -> None:
             if now >= next_stale_sweep:
                 next_stale_sweep = now + STALE_SWEEP_INTERVAL_S
                 await stale_sweep(cache)
+            if now >= next_retention:
+                next_retention = now + RETENTION_INTERVAL_S
+                await _run_retention_sweep()
             await poll_once(cache)
             await asyncio.sleep(POLL_INTERVAL_S)
     except asyncio.CancelledError:

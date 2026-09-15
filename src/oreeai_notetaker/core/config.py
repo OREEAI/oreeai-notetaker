@@ -38,6 +38,19 @@ class Settings(BaseSettings):
     webhook_max_attempts: int = 5
     webhook_timestamp_skew: int = 300
 
+    # PR 6 — object storage (S3 API; provider = env change, e.g. R2,
+    # Hetzner, Backblaze, MinIO). Optional so the API process starts
+    # without them; validated when the adapter is built (runner startup).
+    s3_endpoint_url: str | None = None
+    s3_region: str | None = None
+    s3_bucket: str | None = None
+    s3_access_key_id: str | None = None
+    s3_secret_access_key: str | None = None
+    s3_sse: str = "AES256"
+    s3_presign_ttl_seconds: int = 3600
+    audio_retention_days: int = 0
+    failed_audio_retention_days: int = 7
+
     cors_origins: list[str] = []
 
 

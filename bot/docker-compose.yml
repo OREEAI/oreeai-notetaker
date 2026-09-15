@@ -89,6 +89,18 @@ services:
       BOT_DOCKER_NETWORK: ${BOT_DOCKER_NETWORK:-oreeai_internal}
       WEBHOOK_HTTP_TIMEOUT: ${WEBHOOK_HTTP_TIMEOUT:-10}
       WEBHOOK_MAX_ATTEMPTS: ${WEBHOOK_MAX_ATTEMPTS:-5}
+      # PR 6 — object storage + retention. Bucket unset in dev/staging
+      # falls back to local object storage; production requires a bucket
+      # (the runner refuses to start without one).
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
+      S3_REGION: ${S3_REGION:-}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      S3_SSE: ${S3_SSE:-AES256}
+      S3_PRESIGN_TTL_SECONDS: ${S3_PRESIGN_TTL_SECONDS:-3600}
+      AUDIO_RETENTION_DAYS: ${AUDIO_RETENTION_DAYS:-0}
+      FAILED_AUDIO_RETENTION_DAYS: ${FAILED_AUDIO_RETENTION_DAYS:-7}
     logging:
       driver: json-file
       options:
