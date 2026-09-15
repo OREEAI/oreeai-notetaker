@@ -86,6 +86,17 @@ def fresh_storage_singleton() -> None:
 
 
 @pytest.fixture(autouse=True)
+def silent_retention(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Retention behavior is covered by tests/workers/test_retention.py;
+    the immediate post-done sweep fires inside these runner tests."""
+
+    async def no_retention() -> None:
+        return None
+
+    monkeypatch.setattr(br, "_run_retention_sweep", no_retention)
+
+
+@pytest.fixture(autouse=True)
 def dispatched_calls(monkeypatch: pytest.MonkeyPatch) -> list[uuid.UUID]:
     seen: list[uuid.UUID] = []
 
@@ -316,7 +327,6 @@ class TestExitMapping:
         """storage=None forces the lazy build; a broken configuration must
         degrade to upload_failed, never strand the call in processing."""
         monkeypatch.setattr(settings, "audio_host_path", str(tmp_path))
-        (tmp_path / "stub.wav").write_bytes(b"RIFF")
         call = await make_call(CallStatus.recording, bot_container_name="oreeai-bot-x")
         (tmp_path / f"{call.id}.wav").write_bytes(b"RIFF")
 
@@ -331,6 +341,34 @@ class TestExitMapping:
         assert fresh.failure_reason == "upload_failed"
         assert fresh.audio_url is None
         assert fresh.id in dispatched_calls
+
+    async def test_retention_fires_after_webhook(
+        self,
+        cache: CacheService,
+        storage: FakeStorage,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setattr(settings, "audio_host_path", str(tmp_path))
+        call = await make_call(CallStatus.recording, bot_container_name="oreeai-bot-x")
+        storage.stage(call.id)
+        (tmp_path / f"{call.id}.wav").write_bytes(b"RIFF")
+        events: list[str] = []
+
+        async def fake_dispatch(call_id: uuid.UUID) -> None:
+            events.append("webhook")
+
+        async def fake_retention() -> None:
+            events.append("retention")
+
+        monkeypatch.setattr(br, "dispatch_webhook", fake_dispatch)
+        monkeypatch.setattr(br, "_run_retention_sweep", fake_retention)
+
+        await br.apply_exit_status(call.id, 0, {"end_reason": "call_ended"}, cache, storage)
+
+        # The immediate sweep must run after the webhook so build_payload
+        # still sees audio_url (the URI snapshot) before deletion.
+        assert events == ["webhook", "retention"]
 
     async def test_missing_wav_marks_failed_upload(
         self,

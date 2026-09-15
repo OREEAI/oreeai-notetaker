@@ -15,8 +15,9 @@ tagged with ``call_id``, maps bot exit codes through the shared table,
 uploads the scratch WAV to object storage between ``processing`` and
 ``done`` (PR 6; ``transcript=[]`` still lands at done — PR 7 adds the
 real transcript), heartbeats Redis every 10 s, sweeps orphans on
-startup and stale calls every 60 s, and fires the signed webhook on
-every terminal transition.
+startup, stale calls every 60 s, and expired audio every 60 s
+(retention worker, PR 6 — once immediately after each done as well),
+and fires the signed webhook on every terminal transition.
 
 The API process never gets the docker socket; only this runner (and the
 containers it spawns) touches docker. Logs carry call ids and container
@@ -49,13 +50,20 @@ from oreeai_notetaker.core.exceptions import ConflictError
 from oreeai_notetaker.core.logging import setup_logging
 from oreeai_notetaker.db.session import session_factory
 from oreeai_notetaker.enums import TERMINAL_STATUSES, CallStatus
-from oreeai_notetaker.integrations.object_storage.base import UploadFailed
+from oreeai_notetaker.integrations.object_storage.base import (
+    ConfigurationError,
+    UploadFailed,
+)
 from oreeai_notetaker.models.call import Call
 from oreeai_notetaker.repositories.call import CallRepository
 from oreeai_notetaker.services.call import CallService
 from oreeai_notetaker.services.storage import (
     ObjectStorageService,
     build_object_storage_service,
+)
+from oreeai_notetaker.workers.retention import (
+    RETENTION_INTERVAL_S,
+    enforce_retention,
 )
 from oreeai_notetaker.workers.webhook_dispatcher import deliver
 
@@ -299,13 +307,13 @@ async def apply_exit_status(
         call = await repo.get(call_id)
         if call is None or call.status in TERMINAL_STATUSES:
             return
+        clean = exit_code in (0, 3) and call.status == CallStatus.recording
+        alone_via_silence = (
+            exit_code == 7
+            and call.status == CallStatus.recording
+            and _result_end_reason(result) == "alone"
+        )
         try:
-            clean = exit_code in (0, 3) and call.status == CallStatus.recording
-            alone_via_silence = (
-                exit_code == 7
-                and call.status == CallStatus.recording
-                and _result_end_reason(result) == "alone"
-            )
             if clean or alone_via_silence:
                 if alone_via_silence:
                     end_reason = "alone"
@@ -314,22 +322,23 @@ async def apply_exit_status(
                 else:
                     end_reason = _result_end_reason(result) or "call_ended"
                 await service.mark_processing(call_id)
-                await session.commit()
             else:
                 reason = _failure_reason(exit_code, call.status)
                 await service.mark_failed(call_id, reason)
                 logger.info("call %s failed (bot exit %s, reason=%s)", call_id, exit_code, reason)
-                await session.commit()
-                await dispatch_webhook(call_id)
-                return
         except ConflictError:
             await session.rollback()
             return
+        await session.commit()
 
-        audio_url = await _upload_call_audio(call_id, cache, storage)
-        if audio_url is None:
-            return  # upload_failed path: already marked failed + webhooked
-        await _finish_done_call(call_id, end_reason, audio_url, cache)
+    if not (clean or alone_via_silence):
+        await dispatch_webhook(call_id)
+        return
+
+    audio_url = await _upload_call_audio(call_id, cache, storage)
+    if audio_url is None:
+        return  # upload_failed path: already marked failed + webhooked
+    await _finish_done_call(call_id, end_reason, audio_url, cache)
 
 
 async def _upload_call_audio(
@@ -352,7 +361,15 @@ async def _upload_call_audio(
         await _mark_upload_failed(call_id, cache)
         return None
     if storage is None:
-        storage = build_object_storage_service()
+        # main() pre-builds the service (fail-fast), so this only triggers
+        # on unguarded call paths (tests, future queue workers) — degrade
+        # to upload_failed instead of stranding the call in processing.
+        try:
+            storage = build_object_storage_service()
+        except ConfigurationError as exc:
+            logger.error("call %s upload failed: storage misconfigured: %s", call_id, exc)
+            await _mark_upload_failed(call_id, cache)
+            return None
     try:
         audio_url = await storage.upload_for_call(call_id, wav_path)
     except UploadFailed as exc:
@@ -387,7 +404,8 @@ async def _finish_done_call(
     local WAV is deleted only afterwards — a crash before ``done`` would
     otherwise strand the call in ``processing`` (the stale sweep does not
     cover it), while a crash after ``done`` leaves a benign orphan WAV
-    (README: Data retention — scratch-space policy).
+    (scratch-space policy, documented in the README's Data retention
+    section).
     """
     async with session_factory() as session:
         service = CallService(CallRepository(session), cache)
@@ -400,9 +418,19 @@ async def _finish_done_call(
     logger.info("call %s done (end_reason=%s)", call_id, end_reason)
     _delete_local_wav(call_id)
     await dispatch_webhook(call_id)
-    # PR 6 pass 2: enforce_retention() fires here — after the webhook, so
-    # build_payload still sees audio_url and delivers the URI snapshot
-    # even when AUDIO_RETENTION_DAYS=0 deletes the object immediately.
+    # Immediate retention (PR 6): fires AFTER the webhook, so build_payload
+    # still saw audio_url and delivered the URI snapshot even when
+    # AUDIO_RETENTION_DAYS=0 deletes the object right away. The sweep is
+    # never-crash (per-row try/except inside), the guard is belt-and-braces.
+    await _run_retention_sweep()
+
+
+async def _run_retention_sweep() -> None:
+    """Best-effort retention call site — never crashes the runner."""
+    try:
+        await enforce_retention()
+    except Exception:
+        logger.exception("retention sweep failed; continuing")
 
 
 def _delete_local_wav(call_id: uuid.UUID) -> None:
@@ -648,6 +676,7 @@ async def main() -> None:
 
     next_heartbeat = 0.0
     next_stale_sweep = 0.0
+    next_retention = 0.0
     try:
         while True:
             now = asyncio.get_running_loop().time()
@@ -657,6 +686,9 @@ async def main() -> None:
             if now >= next_stale_sweep:
                 next_stale_sweep = now + STALE_SWEEP_INTERVAL_S
                 await stale_sweep(cache)
+            if now >= next_retention:
+                next_retention = now + RETENTION_INTERVAL_S
+                await _run_retention_sweep()
             await poll_once(cache)
             await asyncio.sleep(POLL_INTERVAL_S)
     except asyncio.CancelledError:
