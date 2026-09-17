@@ -19,6 +19,8 @@ from pathlib import Path
 
 from oreeai_notetaker.core.config import settings
 from oreeai_notetaker.integrations.object_storage.base import (
+    AudioSource,
+    SourceUnavailable,
     UploadFailed,
     audio_key,
 )
@@ -56,6 +58,24 @@ class LocalObjectStorageClient:
         # plain file location. Production always uses the S3 adapter.
         target = self.root / audio_key(call_id)
         return f"file://{target.resolve()}"
+
+    async def transcribable_source(self, call_id: uuid.UUID, *, ttl_seconds: int) -> AudioSource:
+        """Binary-body transport: the provider cannot fetch a ``file://``
+        location, so the transcription adapter POSTs the stored copy's
+        bytes itself.
+
+        ``local_path`` points at the adapter's own stored copy (what the
+        ``file://`` URI already points at) — never the bot's scratch WAV,
+        which PR 6 deletes after upload. The path is for the in-process
+        transcription call only: it must never be logged, and it never
+        leaves the host except as request bytes to the provider.
+        """
+        target = self.root / audio_key(call_id)
+        try:
+            size = await asyncio.to_thread(lambda: target.stat().st_size)
+        except OSError as exc:
+            raise SourceUnavailable(f"stored audio unavailable for call {call_id}") from exc
+        return AudioSource(local_path=target, size_bytes=size)
 
     def _copy(self, source: Path, target: Path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)

@@ -18,6 +18,7 @@ from pathlib import Path
 
 from oreeai_notetaker.core.config import settings
 from oreeai_notetaker.integrations.object_storage.base import (
+    AudioSource,
     ConfigurationError,
     ObjectStorageClient,
 )
@@ -47,6 +48,19 @@ class ObjectStorageService:
         """Time-limited presigned GET URL (default TTL from settings)."""
         ttl = ttl_seconds if ttl_seconds is not None else settings.s3_presign_ttl_seconds
         return await self._client.presigned_url(call_id, ttl_seconds=ttl)
+
+    async def transcribable_source_for_call(
+        self, call_id: uuid.UUID, *, ttl_seconds: int | None = None
+    ) -> AudioSource:
+        """Build the transcription provider's audio source (PR 7).
+
+        Transport is the storage adapter's decision: S3 → presigned GET
+        URL the provider fetches (TTL from ``S3_PRESIGN_TTL_SECONDS``);
+        local dev fallback → its stored-copy path, POSTed as bytes.
+        Raises ``SourceUnavailable`` when the stored object is gone.
+        """
+        ttl = ttl_seconds if ttl_seconds is not None else settings.s3_presign_ttl_seconds
+        return await self._client.transcribable_source(call_id, ttl_seconds=ttl)
 
 
 _storage_service: ObjectStorageService | None = None
