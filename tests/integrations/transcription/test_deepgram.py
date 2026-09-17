@@ -25,6 +25,7 @@ from typing import Any
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from oreeai_notetaker.integrations.object_storage.base import AudioSource
 from oreeai_notetaker.integrations.transcription.base import (
@@ -299,8 +300,6 @@ class TestRealtimeSeam:
 
 class TestAudioSourceInvariants:
     def test_exactly_one_source_required(self) -> None:
-        from pydantic import ValidationError
-
         with pytest.raises(ValidationError):
             AudioSource(url=SAMPLE_PRESIGNED_URL, local_path=Path("/x"), size_bytes=1)
         with pytest.raises(ValidationError):

@@ -54,5 +54,5 @@ class StubTranscriptionClient:
         (e.g. everyone muted); the stub's only observable difference
         from a real provider is that it is always empty.
         """
-        _ = source
+        del source  # never read: the stub performs no I/O on the audio
         return Transcript(segments=[])

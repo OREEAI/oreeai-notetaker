@@ -20,11 +20,8 @@ class AssemblyAITranscriptionClient:
     supports_realtime: bool = True
     """AssemblyAI streams realtime; irrelevant until the seam activates."""
 
-    def __init__(self) -> None:
-        self._api_key_placeholder = None
-
     async def transcribe(self, source: AudioSource) -> Transcript:
-        _ = source
+        del source  # never read: the seam is unimplemented by design
         raise NotImplementedError(
             "AssemblyAI is not built (PR 7 settled on Deepgram); phase 3 seam only"
         )

@@ -192,7 +192,11 @@ class S3ObjectStorageClient:
         key = audio_key(call_id)
         try:
             head = await asyncio.to_thread(self._client.head_object, Bucket=self._bucket, Key=key)
-        except (BotoCoreError, ClientError, OSError) as exc:
+            size = int(head["ContentLength"])
+            # Presigning is local computation, but a raw failure here could
+            # still embed the key in botocore's message — wrapped the same
+            # as the HEAD (call-id-only text, chained cause).
+            url = await self.presigned_url(call_id, ttl_seconds=ttl_seconds)
+        except (BotoCoreError, ClientError, OSError, KeyError) as exc:
             raise SourceUnavailable(f"stored audio unavailable for call {call_id}") from exc
-        url = await self.presigned_url(call_id, ttl_seconds=ttl_seconds)
-        return AudioSource(url=url, size_bytes=int(head["ContentLength"]))
+        return AudioSource(url=url, size_bytes=size)
