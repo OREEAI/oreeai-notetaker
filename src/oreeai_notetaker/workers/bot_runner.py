@@ -12,10 +12,13 @@ the concurrency ceiling and free disk race-free against the API, spawns
 the bot container with the PR 4 resource envelope (``--rm``, never a
 restart flag — the streaming wait owns the exit), streams bot output
 tagged with ``call_id``, maps bot exit codes through the shared table,
-uploads the scratch WAV to object storage between ``processing`` and
-``done`` (PR 6; ``transcript=[]`` still lands at done — PR 7 adds the
-real transcript), heartbeats Redis every 10 s, sweeps orphans on
-startup, stale calls every 60 s, and expired audio every 60 s
+uploads the scratch WAV to object storage, transcribes it (PR 7 —
+the ``processing -> done`` transition is driven by the real transcript
+landing; the honest-empty ``[]`` is legitimate for a muted call),
+heartbeats Redis every 10 s, sweeps orphans on
+startup, stale calls every 60 s (``joining``/``recording`` AND
+``processing`` — PR 7 extends the sweep to cover hung transcription),
+and expired audio every 60 s
 (retention worker, PR 6 — once immediately after each done as well),
 and fires the signed webhook on every terminal transition.
 
@@ -42,7 +45,7 @@ from typing import Any
 
 import redis.asyncio as aioredis
 from redis.exceptions import RedisError
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from oreeai_notetaker.core.cache import CacheService
 from oreeai_notetaker.core.config import settings
@@ -51,8 +54,15 @@ from oreeai_notetaker.core.logging import setup_logging
 from oreeai_notetaker.db.session import session_factory
 from oreeai_notetaker.enums import TERMINAL_STATUSES, CallStatus
 from oreeai_notetaker.integrations.object_storage.base import (
+    AudioSource,
     ConfigurationError,
+    ObjectStorageError,
+    SourceUnavailable,
     UploadFailed,
+)
+from oreeai_notetaker.integrations.transcription.base import (
+    Transcript,
+    TranscriptionError,
 )
 from oreeai_notetaker.models.call import Call
 from oreeai_notetaker.repositories.call import CallRepository
@@ -60,6 +70,10 @@ from oreeai_notetaker.services.call import CallService
 from oreeai_notetaker.services.storage import (
     ObjectStorageService,
     build_object_storage_service,
+)
+from oreeai_notetaker.services.transcription import (
+    TranscriptionService,
+    build_transcription_service,
 )
 from oreeai_notetaker.workers.retention import (
     RETENTION_INTERVAL_S,
@@ -75,6 +89,12 @@ POLL_INTERVAL_S = 2.0
 HEARTBEAT_INTERVAL_S = 10.0
 STALE_SWEEP_INTERVAL_S = 60.0
 STALE_CALL_GRACE_S = 300
+# Stale `processing` cutoff (PR 7): transcription worst case is 3×660 s
+# provider read-timeout + 1/4 s sleeps + upload time ≈ 2090 s; 2400 s
+# leaves slack. A runner crash during transcription would otherwise
+# strand the call in `processing` forever (the stale sweep is the only
+# watchdog for it — the bot container is gone by then).
+PROCESSING_STALE_CUTOFF_S = 2400
 DISK_MIN_FREE_BYTES = 2 * 1024**3
 
 # Resource envelope — mirrors bot/docker-compose.yml (parity is locked by
@@ -290,16 +310,23 @@ async def apply_exit_status(
     result: dict[str, Any] | None,
     cache: CacheService,
     storage: ObjectStorageService | None = None,
+    transcription: TranscriptionService | None = None,
 ) -> None:
     """Map a bot exit through the shared table.
 
     Clean exits (0, and 3 = removed mid-call) and the disambiguated
-    exit-7-``alone`` case run the PR 6 storage seam: ``recording ->
-    processing`` commits first (row lock released before network I/O),
-    then the scratch WAV is uploaded, then ``processing -> done`` lands
-    atomically with ``audio_url``, then the local WAV is deleted, then
-    the webhook fires. On upload failure the call is
-    ``failed/upload_failed`` and done is never reached.
+    exit-7-``alone`` case run the PR 6 storage seam followed by the PR 7
+    transcription seam: ``recording -> processing`` commits first (row
+    lock released before network I/O), then the scratch WAV is uploaded,
+    then the stored object is made transcribable (``AudioSource`` — the
+    storage adapter owns the transport), then the provider call runs
+    with the service retry policy, then ``processing -> done`` lands
+    atomically with ``audio_url`` AND the real transcript segments, then
+    the local WAV is deleted, then the webhook fires. On any permanent
+    failure after the upload the call is ``failed/
+    transcription_failed:<detail>`` (or ``failed/upload_failed`` before
+    the upload) and done is never reached; the stored object then rides
+    the failed-audio retention window.
     """
     async with session_factory() as session:
         repo = CallRepository(session)
@@ -338,7 +365,114 @@ async def apply_exit_status(
     audio_url = await _upload_call_audio(call_id, cache, storage)
     if audio_url is None:
         return  # upload_failed path: already marked failed + webhooked
-    await _finish_done_call(call_id, end_reason, audio_url, cache)
+    source = await _transcribable_source(call_id, cache, audio_url, storage)
+    if source is None:
+        return  # source_unavailable path: already marked failed + webhooked
+    transcript = await _transcribe_call(call_id, cache, audio_url, source, transcription)
+    if transcript is None:
+        return  # transcription_failed path: already marked failed + webhooked
+    await _finish_done_call(call_id, end_reason, audio_url, cache, transcript)
+
+
+async def _transcribable_source(
+    call_id: uuid.UUID,
+    cache: CacheService,
+    audio_url: str,
+    storage: ObjectStorageService | None = None,
+) -> AudioSource | None:
+    """Make the stored object transcribable (transport owned by the
+    storage adapter: S3 → presigned GET; local → stored-copy path).
+
+    ``SourceUnavailable`` means the stored object vanished or is
+    unreadable after a successful upload — an operational anomaly. The
+    call is marked ``failed/transcription_failed:source_unavailable``
+    WITH the ``audio_url`` snapshot (the failed-audio retention window
+    reclaims the object if it reappears or for audit); no source is
+    returned when the failure is already handled.
+    """
+    if storage is None:
+        try:
+            storage = build_object_storage_service()
+        except ConfigurationError as exc:
+            logger.error("call %s transcription failed: storage misconfigured: %s", call_id, exc)
+            await _mark_transcription_failed(call_id, cache, "storage_misconfigured", audio_url)
+            return None
+    try:
+        return await storage.transcribable_source_for_call(call_id)
+    except (SourceUnavailable, ObjectStorageError) as exc:
+        logger.error("call %s transcription failed: source unavailable: %s", call_id, exc)
+        await _mark_transcription_failed(call_id, cache, "source_unavailable", audio_url)
+        return None
+
+
+async def _transcribe_call(
+    call_id: uuid.UUID,
+    cache: CacheService,
+    audio_url: str,
+    source: AudioSource,
+    transcription: TranscriptionService | None = None,
+) -> Transcript | None:
+    """Run transcription under the service's retry policy.
+
+    Permanent outcomes — including ``AudioTooLarge`` (the size guard)
+    and transient-exhaustion (re-raised permanent after 3 attempts) —
+    mark the call ``failed/transcription_failed:<detail>`` and persist
+    the ``audio_url`` snapshot so the now-live failed-audio retention
+    window (``FAILED_AUDIO_RETENTION_DAYS``, default 7) owns the stored
+    object: the runner deliberately never deletes it here, the periodic
+    retention tick reclaims it at the cutoff. Returns ``None`` after
+    marking + webhook.
+    """
+    if transcription is None:
+        try:
+            transcription = build_transcription_service()
+        except ConfigurationError as exc:
+            logger.error("call %s transcription failed: misconfigured: %s", call_id, exc)
+            await _mark_transcription_failed(call_id, cache, f"misconfigured: {exc}", audio_url)
+            return None
+    try:
+        return await transcription.transcribe(source)
+    except TranscriptionError as exc:
+        detail = _failure_detail(exc)
+        logger.error("call %s transcription failed: %s", call_id, detail)
+        await _mark_transcription_failed(call_id, cache, detail, audio_url)
+        return None
+
+
+async def _mark_transcription_failed(
+    call_id: uuid.UUID,
+    cache: CacheService,
+    detail: str,
+    audio_url: str,
+) -> None:
+    """Mark failed with the transcription reason AND the stored-object
+    snapshot — the failed-audio retention window keys off
+    ``status=failed`` + ``audio_url IS NOT NULL``, so the object must be
+    persisted here or the sweep would never reclaim it."""
+    async with session_factory() as session:
+        repo = CallRepository(session)
+        service = CallService(repo, cache)
+        try:
+            await service.mark_failed(call_id, f"transcription_failed:{detail}")
+            call = await repo.get(call_id)
+            if call is not None and audio_url:
+                await repo.update(call, {"audio_url": audio_url})
+            await session.commit()
+        except ConflictError:
+            await session.rollback()
+            return
+    # The upload already succeeded, so the stored copy (now persisted on
+    # the row and owned by the failed-audio retention window) is the
+    # durable record — the scratch WAV is redundant disk residue and is
+    # deleted here exactly as it is on the done path (best-effort).
+    _delete_local_wav(call_id)
+    await dispatch_webhook(call_id)
+
+
+def _failure_detail(exc: Exception) -> str:
+    """Exception message, sanitized for ``failure_reason`` (counts and
+    status codes only by construction; no transcript text, no paths)."""
+    return str(exc)
 
 
 async def _upload_call_audio(
@@ -397,25 +531,30 @@ async def _finish_done_call(
     end_reason: str,
     audio_url: str,
     cache: CacheService,
+    transcript: Transcript,
 ) -> None:
-    """Land ``processing -> done`` with the object URI, then scratch cleanup.
+    """Land ``processing -> done`` with the object URI and real segments,
+    then scratch cleanup.
 
-    ``audio_url`` is written atomically with the ``done`` transition; the
-    local WAV is deleted only afterwards — a crash before ``done`` would
-    otherwise strand the call in ``processing`` (the stale sweep does not
-    cover it), while a crash after ``done`` leaves a benign orphan WAV
-    (scratch-space policy, documented in the README's Data retention
-    section).
+    ``audio_url`` and the transcript are written atomically with the
+    ``done`` transition (segments round-trip as plain dicts — the JSONB
+    column is a storage concern, never Postgres-specific operators);
+    the local WAV is deleted only afterwards — a crash before ``done``
+    would otherwise strand the call in ``processing`` (the PR 7 stale
+    sweep now covers that), while a crash after ``done`` leaves a benign
+    orphan WAV (scratch-space policy, documented in the README's Data
+    retention section).
     """
+    segments = [segment.model_dump() for segment in transcript.segments]
     async with session_factory() as session:
         service = CallService(CallRepository(session), cache)
         try:
-            await service.mark_done(call_id, end_reason, transcript=[], audio_url=audio_url)
+            await service.mark_done(call_id, end_reason, transcript=segments, audio_url=audio_url)
             await session.commit()
         except ConflictError:
             await session.rollback()
             return
-    logger.info("call %s done (end_reason=%s)", call_id, end_reason)
+    logger.info("call %s done (end_reason=%s, segments=%s)", call_id, end_reason, len(segments))
     _delete_local_wav(call_id)
     await dispatch_webhook(call_id)
     # Immediate retention (PR 6): fires AFTER the webhook, so build_payload
@@ -605,19 +744,31 @@ async def orphan_sweep(cache: CacheService) -> None:
 async def stale_sweep(cache: CacheService) -> None:
     """Every 60 s: calls in joining/recording whose ``updated_at`` is
     older than ``BOT_MAX_RECORD_DURATION + STALE_CALL_GRACE_S`` are
-    killed and marked ``failed/stale_call``."""
-    cutoff = datetime.now(UTC) - timedelta(
+    killed and marked ``failed/stale_call``; and (PR 7) calls in
+    ``processing`` past ``PROCESSING_STALE_CUTOFF_S`` likewise — a
+    hung transcription (or a runner crash mid-transcription) otherwise
+    strands the call in ``processing`` forever, since the bot container
+    is already gone by that stage."""
+    now = datetime.now(UTC)
+    recording_cutoff = now - timedelta(
         seconds=settings.bot_max_record_duration + STALE_CALL_GRACE_S
     )
+    processing_cutoff = now - timedelta(seconds=PROCESSING_STALE_CUTOFF_S)
     async with session_factory() as session:
         stmt = select(Call.id).where(
-            Call.status.in_((CallStatus.joining, CallStatus.recording)),
-            Call.updated_at < cutoff,
+            or_(
+                Call.status.in_((CallStatus.joining, CallStatus.recording))
+                & (Call.updated_at < recording_cutoff),
+                (Call.status == CallStatus.processing) & (Call.updated_at < processing_cutoff),
+            )
         )
         stale_ids = (await session.execute(stmt)).scalars().all()
 
     for call_id in stale_ids:
-        logger.warning("stale sweep: call %s past max record duration; failing", call_id)
+        logger.warning("stale sweep: call %s past stale cutoff; failing", call_id)
+        # Best-effort container kill: joining/recording bots are usually
+        # alive; a processing call's container is long gone (--rm), where
+        # this is a harmless no-op against any residue.
         await run_docker("kill", container_name(call_id))
         await run_docker("rm", "-f", container_name(call_id))
         async with session_factory() as session:
@@ -646,10 +797,12 @@ def _prepare_audio_dir() -> bool:
 async def main() -> None:
     setup_logging(settings.log_level)
 
-    # Storage selection happens first and fail-fast: a runner that
-    # cannot store audio must not run (ConfigurationError in production
-    # with unset S3 vars; local stand-in elsewhere, which warns loudly).
+    # Storage and transcription selection happen first and fail-fast: a
+    # runner that cannot store audio or transcribe it must not run
+    # (ConfigurationError in production with unset vars; local/stub
+    # stand-ins elsewhere, which warn loudly).
     build_object_storage_service()
+    build_transcription_service()
 
     cache = CacheService(None)
     try:

@@ -48,6 +48,7 @@ See [AGENTS.md](AGENTS.md) for architecture, conventions, and how to add feature
 
 The product is the transcript; the audio is not. This section is the
 written policy — an outsider should be able to read it and know exactly
+
 what happens to a meeting recording.
 
 **What is stored, where.** Each call produces one audio file (a 16 kHz
@@ -174,6 +175,18 @@ is actually used) — for phase 1, `AES256` is enough.
 beyond the retention policy) is not implemented yet — it needs its own
 endpoint and will be a follow-up. The retention policy above is the
 baseline.
+
+## Transcription
+
+Recordings are transcribed by **Deepgram** (`nova-3`, pre-recorded
+batch) with speaker diarization (`diarize_model=latest`); the segments
+land in `Call.transcript` (JSONB) and in the webhook payload. Provider
+choice, request shape, error mapping, and the pending realtime
+confirmation are documented in
+[docs/transcription.md](docs/transcription.md). Locally (no
+credentials), `TRANSCRIPTION_PROVIDER` unset falls back to a stub that
+lands every call `done` with an empty transcript — production
+fail-fasts without a real provider.
 
 ## Layout
 

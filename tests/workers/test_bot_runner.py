@@ -16,13 +16,25 @@ from oreeai_notetaker.core.config import settings
 from oreeai_notetaker.db.base import Base
 from oreeai_notetaker.enums import ACTIVE_STATUSES, CallStatus
 from oreeai_notetaker.integrations.object_storage.base import (
+    AudioSource,
     ConfigurationError,
+    SourceUnavailable,
     UploadFailed,
+)
+from oreeai_notetaker.integrations.transcription.base import (
+    SpeakerSegment,
+    Transcript,
 )
 from oreeai_notetaker.models.call import Call
 from oreeai_notetaker.services.storage import reset_object_storage_service
+from oreeai_notetaker.services.transcription import reset_transcription_service
 
 SECRET = "shhhhhhhhhhhhhhhh"
+
+FAKE_SEGMENTS = [
+    {"speaker": "S0", "start": 0.1, "end": 1.4, "text": "hello there."},
+    {"speaker": "S1", "start": 1.8, "end": 2.9, "text": "hi back"},
+]
 
 
 class FakeStorage:
@@ -34,6 +46,7 @@ class FakeStorage:
         self.staged: set[uuid.UUID] = set()
         self.uploads: list[uuid.UUID] = []
         self.fail = False
+        self.source_fail = False
 
     def stage(self, call_id: uuid.UUID) -> None:
         self.staged.add(call_id)
@@ -42,6 +55,7 @@ class FakeStorage:
         self.staged.clear()
         self.uploads.clear()
         self.fail = False
+        self.source_fail = False
 
     async def upload_for_call(self, call_id: uuid.UUID, file_path: Path) -> str:
         if self.fail or call_id not in self.staged:
@@ -55,10 +69,44 @@ class FakeStorage:
     async def presigned_url_for_call(self, call_id: uuid.UUID, *, ttl_seconds: int) -> str:
         return f"file:///scratch/calls/{call_id}/audio.wav"
 
+    async def transcribable_source_for_call(
+        self, call_id: uuid.UUID, *, ttl_seconds: int | None = None
+    ) -> AudioSource:
+        if self.source_fail:
+            raise SourceUnavailable(f"stored audio unavailable for call {call_id}")
+        return AudioSource(url=f"file:///scratch/calls/{call_id}/audio.wav", size_bytes=1024)
+
+
+class FakeTranscription:
+    """``TranscriptionService`` stand-in: returns the FAKE_SEGMENTS dict
+    list wrapped in a Transcript, or raises the scripted error once."""
+
+    def __init__(self, *, fail_with: Exception | None = None) -> None:
+        self.calls: list[AudioSource] = []
+        self.fail_with = fail_with
+
+    async def transcribe(self, source: AudioSource) -> Transcript:
+        self.calls.append(source)
+        if self.fail_with is not None:
+            raise self.fail_with
+        return Transcript(segments=[SpeakerSegment(**segment) for segment in FAKE_SEGMENTS])
+
 
 @pytest.fixture
 def storage() -> FakeStorage:
     return FakeStorage()
+
+
+@pytest.fixture
+def transcription() -> FakeTranscription:
+    return FakeTranscription()
+
+
+@pytest.fixture(autouse=True)
+def fresh_transcription_singleton() -> None:
+    reset_transcription_service()
+    yield
+    reset_transcription_service()
 
 
 @pytest.fixture
@@ -248,6 +296,7 @@ class TestExitMapping:
         cache: CacheService,
         dispatched_calls: list[uuid.UUID],
         storage: FakeStorage,
+        transcription: FakeTranscription,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
     ) -> None:
@@ -267,28 +316,32 @@ class TestExitMapping:
         ]
         for start, exit_code, result, expected_status, reason in cases:
             storage.reset()
+            transcription.calls.clear()
+            transcription.fail_with = None
             call = await make_call(start, bot_container_name="oreeai-bot-x")
             wav = tmp_path / f"{call.id}.wav"
             if expected_status == CallStatus.done:
                 storage.stage(call.id)
                 wav.write_bytes(b"RIFF")
-            await br.apply_exit_status(call.id, exit_code, result, cache, storage)
+            await br.apply_exit_status(call.id, exit_code, result, cache, storage, transcription)
             fresh = await get_call(call.id)
             assert fresh.status == expected_status, (start, exit_code)
             if expected_status == CallStatus.done:
                 assert fresh.end_reason == reason, (start, exit_code)
-                assert fresh.transcript == [], (start, exit_code)
+                assert fresh.transcript == FAKE_SEGMENTS, (start, exit_code)
                 assert fresh.audio_url == f"s3://test-bucket/calls/{call.id}/audio.wav", (
                     start,
                     exit_code,
                 )
                 assert storage.uploads == [call.id], (start, exit_code)
+                assert len(transcription.calls) == 1, (start, exit_code)
                 assert not wav.exists(), (start, exit_code)  # scratch WAV deleted after upload
             else:
                 assert fresh.failure_reason == reason, (start, exit_code)
                 assert fresh.transcript is None, (start, exit_code)
                 assert fresh.audio_url is None, (start, exit_code)
                 assert storage.uploads == [], (start, exit_code)
+                assert transcription.calls == [], (start, exit_code)
             assert fresh.id in dispatched_calls, (start, exit_code)
 
     async def test_upload_failure_marks_failed(
@@ -346,6 +399,7 @@ class TestExitMapping:
         self,
         cache: CacheService,
         storage: FakeStorage,
+        transcription: FakeTranscription,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
     ) -> None:
@@ -364,7 +418,9 @@ class TestExitMapping:
         monkeypatch.setattr(br, "dispatch_webhook", fake_dispatch)
         monkeypatch.setattr(br, "_run_retention_sweep", fake_retention)
 
-        await br.apply_exit_status(call.id, 0, {"end_reason": "call_ended"}, cache, storage)
+        await br.apply_exit_status(
+            call.id, 0, {"end_reason": "call_ended"}, cache, storage, transcription
+        )
 
         # The immediate sweep must run after the webhook so build_payload
         # still sees audio_url (the URI snapshot) before deletion.
@@ -551,6 +607,7 @@ class TestSpawnFlow:
     ) -> None:
         monkeypatch.setattr(settings, "s3_bucket", None)  # local storage fallback
         monkeypatch.setattr(settings, "environment", "local")
+        monkeypatch.setattr(settings, "transcription_provider", None)  # stub fallback
         call = await make_call(CallStatus.joining)
         profile_src = tmp_path / "profile"
         profile_src.mkdir()
@@ -592,6 +649,9 @@ class TestSpawnFlow:
         assert fresh.audio_url == f"file://{stored.resolve()}"
         assert not wav.exists(), "scratch WAV deleted after upload"
         assert stored.exists()
+        # PR 7: no transcription service injected here — the lazy build
+        # falls back to the stub provider (honest empty transcript).
+        assert fresh.transcript == []
 
     async def test_run_call_skips_when_not_joinable(
         self, cache: CacheService, monkeypatch: pytest.MonkeyPatch

@@ -199,13 +199,27 @@ def parse_response(payload: dict[str, Any]) -> Transcript:
     a 1:1 map onto the pinned segment schema. Fallback (param ignored by
     the provider): group ``alternatives[].words[]`` into same-speaker
     runs. Never raise with transcript content in the message.
+
+    Honesty pins: an empty ``utterances`` list is the honest silent-call
+    result and maps to ``Transcript(segments=[])``. But a NON-empty
+    utterances list that yields zero valid segments is provider drift
+    (e.g. ``speaker`` turned null after an API change) — the response is
+    the only copy of the transcript, so a systematic drop must fail the
+    call permanently, not masquerade as "nobody spoke".
     """
     results = payload.get("results")
     if not isinstance(results, dict):
         raise PermanentTranscriptionError("deepgram response missing results object")
     utterances = results.get("utterances")
     if isinstance(utterances, list):
-        return Transcript(segments=_segments_from_utterances(utterances))
+        segments, dropped = _segments_from_utterances(utterances)
+        if dropped:
+            logger.warning("deepgram utterances: dropped=%s unparseable entries", dropped)
+        if not segments and utterances:
+            raise PermanentTranscriptionError(
+                "deepgram response has utterances but none parsed as segments"
+            )
+        return Transcript(segments=segments)
     alternatives = [
         alt
         for channel in _as_dicts(results.get("channels"))
@@ -220,10 +234,12 @@ def _as_dicts(value: Any) -> list[dict[str, Any]]:
     return [item for item in value if isinstance(item, dict)]
 
 
-def _segments_from_utterances(utterances: list[Any]) -> list[SpeakerSegment]:
+def _segments_from_utterances(utterances: list[Any]) -> tuple[list[SpeakerSegment], int]:
     segments: list[SpeakerSegment] = []
+    dropped = 0
     for utterance in utterances:
         if not isinstance(utterance, dict):
+            dropped += 1
             continue
         speaker = utterance.get("speaker")
         start = utterance.get("start")
@@ -235,11 +251,12 @@ def _segments_from_utterances(utterances: list[Any]) -> list[SpeakerSegment]:
             or not isinstance(end, (int, float))
             or not isinstance(text, str)
         ):
+            dropped += 1
             continue
         segments.append(
             SpeakerSegment(speaker=f"S{speaker}", start=float(start), end=float(end), text=text)
         )
-    return segments
+    return segments, dropped
 
 
 def _segments_from_words(alternatives: list[dict[str, Any]]) -> list[SpeakerSegment]:

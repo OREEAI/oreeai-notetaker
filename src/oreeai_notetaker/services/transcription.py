@@ -8,9 +8,13 @@ storage adapter built; this service owns the chunk's policy:
   ``AudioTooLarge``, permanent — surfaced as
   ``transcription_failed:size_*`` by the runner).
 - **Retry policy**: transient errors (429/5xx/timeout/transport) get 3
-  attempts with 1/4/16 s backoff; permanent errors (401/400/402, other
-  4xx) fail immediately. Exhausted transient attempts re-raise as
-  permanent so the runner's failure path is uniform.
+  attempts, sleeping only *between* attempts (webhook-dispatcher
+  precedent: ``BACKOFF_S[attempt]`` for ``attempt < RETRY_ATTEMPTS - 1``
+  — 3 attempts therefore sleep 1 s and 4 s; the 16 s entry is the
+  sequence's third step, unreachable with 3 attempts, kept for the
+  webhook-tuple idiom). Permanent errors (401/400/402, other 4xx) fail
+  immediately. Exhausted transient attempts re-raise as permanent so
+  the runner's failure path is uniform.
 
 Provider selection (``build_transcription_service``, cached per process
 like the storage builder; fail fast at runner startup):

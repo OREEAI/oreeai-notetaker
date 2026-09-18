@@ -291,6 +291,35 @@ class TestResponseParsing:
         with pytest.raises(PermanentTranscriptionError, match="results"):
             parse_response({"metadata": {}})
 
+    def test_all_malformed_utterances_is_permanent_not_silent(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Provider drift (e.g. speaker: null after an API change) must NOT
+        # masquerade as a muted call — the response is the only copy.
+        payload = _utterances_payload()
+        payload["results"]["utterances"] = [
+            {"transcript": "hello there.", "start": 0.1, "end": 1.4, "speaker": None},
+            {"transcript": "hi back", "start": 1.8, "end": 2.9},
+        ]
+        with pytest.raises(PermanentTranscriptionError, match="none parsed"):
+            parse_response(payload)
+        assert "dropped=2" in caplog.text
+
+    def test_partially_malformed_utterances_kept_and_counted(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        payload = _utterances_payload()
+        payload["results"]["utterances"].insert(0, {"bogus": True})
+        transcript = parse_response(payload)
+        assert len(transcript.segments) == 2  # the valid ones survive
+        assert "dropped=1" in caplog.text
+
+    def test_empty_utterances_is_honest_silence(self) -> None:
+        payload = _utterances_payload()
+        payload["results"]["utterances"] = []
+        transcript = parse_response(payload)
+        assert transcript.segments == []
+
 
 class TestRealtimeSeam:
     def test_supports_realtime_flag(self) -> None:
