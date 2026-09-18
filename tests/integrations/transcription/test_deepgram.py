@@ -320,6 +320,36 @@ class TestResponseParsing:
         transcript = parse_response(payload)
         assert transcript.segments == []
 
+    def test_all_malformed_words_fallback_is_permanent_not_silent(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # words-fallback symmetric pin: words came back but none parsed
+        # → provider drift, not a muted call
+        payload = {
+            "results": {
+                "channels": [
+                    {
+                        "alternatives": [
+                            {
+                                "words": [
+                                    {"start": 0.0, "end": 0.5},  # speaker missing
+                                    {"speaker": None, "start": 0.5, "end": 0.9},
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        with pytest.raises(PermanentTranscriptionError, match="words but none parsed"):
+            parse_response(payload)
+        assert "dropped=2" in caplog.text
+
+    def test_no_words_at_all_is_honest_silence(self) -> None:
+        payload = {"results": {"channels": [{"alternatives": [{"transcript": "", "words": []}]}]}}
+        transcript = parse_response(payload)
+        assert transcript.segments == []
+
 
 class TestRealtimeSeam:
     def test_supports_realtime_flag(self) -> None:

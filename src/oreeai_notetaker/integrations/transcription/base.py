@@ -26,7 +26,14 @@ from oreeai_notetaker.integrations.object_storage.base import AudioSource
 
 
 class TranscriptionError(Exception):
-    """Base class for typed transcription failures."""
+    """Base class for typed transcription failures.
+
+    Message pin (by construction, checked by review): every subclass's
+    message is call-id-safe — status codes and counts only, never
+    transcript text, URLs (presigned or otherwise), file paths, object
+    keys, or API keys. These messages flow into ``failure_reason`` and
+    therefore into webhook payloads.
+    """
 
 
 class TransientTranscriptionError(TranscriptionError):

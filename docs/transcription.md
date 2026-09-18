@@ -89,6 +89,7 @@ adapter just consumes it:
 | 400, 401 | permanent | immediate `failed` |
 | **402** | permanent | immediate `failed` — insufficient credits, operator action required (no retry helps) |
 | other 4xx | permanent | immediate `failed` |
+| 3xx (e.g. a redirect on the pinned POST endpoint) | permanent | immediate `failed` — the endpoint is pinned; redirects are contract drift |
 
 Failure reason format: `transcription_failed:<detail>` (status codes and
 counts only — never transcript text). `transcription_failed:source_

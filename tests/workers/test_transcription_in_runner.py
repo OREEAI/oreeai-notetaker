@@ -509,6 +509,25 @@ class TestStaleProcessingSweep:
         assert fresh.status == CallStatus.processing
         assert fresh.id not in dispatched_calls
 
+    async def test_sweep_crash_never_kills_the_runner_loop(
+        self,
+        cache: CacheService,
+        monkeypatch: pytest.MonkeyPatch,
+        dispatched_calls: list[uuid.UUID],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The stale sweep is the sole watchdog for hung processing calls —
+        a transient DB/docker error inside it must be logged and skipped,
+        never propagated into the main loop (mirror of the retention
+        never-crash guard)."""
+
+        async def boom(*args: Any) -> None:
+            raise RuntimeError("db connection gone mid-sweep")
+
+        monkeypatch.setattr(br, "_stale_sweep_inner", boom)
+        await br.stale_sweep(cache)  # must not raise
+        assert "stale sweep failed" in caplog.text
+
 
 def _recording_docker(calls: list[str]) -> Any:
     async def fake_run_docker(*args: str) -> tuple[int, str, str]:

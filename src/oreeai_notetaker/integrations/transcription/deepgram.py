@@ -225,7 +225,14 @@ def parse_response(payload: dict[str, Any]) -> Transcript:
         for channel in _as_dicts(results.get("channels"))
         for alt in _as_dicts(channel.get("alternatives"))
     ]
-    return Transcript(segments=_segments_from_words(alternatives))
+    segments, dropped, words_seen = _segments_from_words(alternatives)
+    if dropped:
+        logger.warning("deepgram words: dropped=%s unparseable entries", dropped)
+    # Same honesty pin as the utterances path: words came back but none
+    # parsed → provider drift, not a muted call.
+    if not segments and words_seen:
+        raise PermanentTranscriptionError("deepgram response has words but none parsed as segments")
+    return Transcript(segments=segments)
 
 
 def _as_dicts(value: Any) -> list[dict[str, Any]]:
@@ -259,11 +266,28 @@ def _segments_from_utterances(utterances: list[Any]) -> tuple[list[SpeakerSegmen
     return segments, dropped
 
 
-def _segments_from_words(alternatives: list[dict[str, Any]]) -> list[SpeakerSegment]:
-    """Fallback segmentation: consecutive same-speaker words → segments."""
+def _segments_from_words(
+    alternatives: list[dict[str, Any]],
+) -> tuple[list[SpeakerSegment], int, int]:
+    """Fallback segmentation: consecutive same-speaker words → segments.
+
+    Returns ``(segments, dropped_count, words_seen)`` — ``words_seen``
+    counts every word dict inspected so the caller can distinguish
+    "no words at all" (honest silence) from "words existed but none
+    parsed" (provider drift → permanent).
+    """
     segments: list[SpeakerSegment] = []
+    dropped = 0
+    words_seen = 0
     for alt in alternatives:
-        for word in _as_dicts(alt.get("words")):
+        raw_words = alt.get("words")
+        if not isinstance(raw_words, list):
+            continue
+        for word in raw_words:
+            words_seen += 1
+            if not isinstance(word, dict):
+                dropped += 1
+                continue
             speaker = word.get("speaker")
             start = word.get("start")
             end = word.get("end")
@@ -272,6 +296,7 @@ def _segments_from_words(alternatives: list[dict[str, Any]]) -> list[SpeakerSegm
                 or not isinstance(start, (int, float))
                 or not isinstance(end, (int, float))
             ):
+                dropped += 1
                 continue
             text = str(word.get("punctuated_word") or word.get("word") or "")
             if segments and segments[-1].speaker == f"S{speaker}":
@@ -286,7 +311,7 @@ def _segments_from_words(alternatives: list[dict[str, Any]]) -> list[SpeakerSegm
                         text=text,
                     )
                 )
-    return segments
+    return segments, dropped, words_seen
 
 
 async def _file_chunks(path: Path, chunk_size: int = _FILE_CHUNK_BYTES) -> AsyncIterator[bytes]:

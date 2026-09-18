@@ -91,9 +91,14 @@ STALE_SWEEP_INTERVAL_S = 60.0
 STALE_CALL_GRACE_S = 300
 # Stale `processing` cutoff (PR 7): transcription worst case is 3×660 s
 # provider read-timeout + 1/4 s sleeps + upload time ≈ 2090 s; 2400 s
-# leaves slack. A runner crash during transcription would otherwise
-# strand the call in `processing` forever (the stale sweep is the only
-# watchdog for it — the bot container is gone by then).
+# leaves slack (arithmetic is S3-transport-specific — the provider
+# fetches, so each attempt is bounded by the 660 s read timeout; the
+# dev binary-body transport streams up to 2 GB from this host per
+# attempt and can legitimately exceed 2400 s, where stale-fail is an
+# honest, benign outcome with the audio riding the failed window). A
+# runner crash during transcription would otherwise strand the call in
+# `processing` forever (the stale sweep is the only watchdog for it —
+# the bot container is gone by then).
 PROCESSING_STALE_CUTOFF_S = 2400
 DISK_MIN_FREE_BYTES = 2 * 1024**3
 
@@ -748,7 +753,20 @@ async def stale_sweep(cache: CacheService) -> None:
     ``processing`` past ``PROCESSING_STALE_CUTOFF_S`` likewise — a
     hung transcription (or a runner crash mid-transcription) otherwise
     strands the call in ``processing`` forever, since the bot container
-    is already gone by that stage."""
+    is already gone by that stage.
+
+    Never crashes the runner: the sweep is now the sole watchdog for
+    hung processing calls, so a transient DB error or a missing docker
+    binary must be logged and skipped, not propagated into the main
+    loop (mirrors ``_run_retention_sweep``).
+    """
+    try:
+        await _stale_sweep_inner(cache)
+    except Exception:
+        logger.exception("stale sweep failed; continuing")
+
+
+async def _stale_sweep_inner(cache: CacheService) -> None:
     now = datetime.now(UTC)
     recording_cutoff = now - timedelta(
         seconds=settings.bot_max_record_duration + STALE_CALL_GRACE_S

@@ -48,7 +48,6 @@ See [AGENTS.md](AGENTS.md) for architecture, conventions, and how to add feature
 
 The product is the transcript; the audio is not. This section is the
 written policy — an outsider should be able to read it and know exactly
-
 what happens to a meeting recording.
 
 **What is stored, where.** Each call produces one audio file (a 16 kHz
