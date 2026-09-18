@@ -38,8 +38,10 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from oreeai_notetaker.core.config import settings
 from oreeai_notetaker.integrations.object_storage.base import (
+    AudioSource,
     ConfigurationError,
     DeleteFailed,
+    SourceUnavailable,
     UploadFailed,
     audio_key,
     s3_uri,
@@ -177,3 +179,24 @@ class S3ObjectStorageClient:
             Params={"Bucket": self._bucket, "Key": audio_key(call_id)},
             ExpiresIn=ttl_seconds,
         )
+
+    async def transcribable_source(self, call_id: uuid.UUID, *, ttl_seconds: int) -> AudioSource:
+        """Presigned-GET transport: Deepgram fetches from the bucket.
+
+        The presigned URL is time-limited (presigned-only serving) and
+        is handed straight to the provider — it must never be logged.
+        ``head_object`` doubles as the existence check: a vanished
+        object raises ``SourceUnavailable`` with a call-id-only message
+        (botocore errors embed the key; never carried in the text).
+        """
+        key = audio_key(call_id)
+        try:
+            head = await asyncio.to_thread(self._client.head_object, Bucket=self._bucket, Key=key)
+            size = int(head["ContentLength"])
+            # Presigning is local computation, but a raw failure here could
+            # still embed the key in botocore's message — wrapped the same
+            # as the HEAD (call-id-only text, chained cause).
+            url = await self.presigned_url(call_id, ttl_seconds=ttl_seconds)
+        except (BotoCoreError, ClientError, OSError, KeyError) as exc:
+            raise SourceUnavailable(f"stored audio unavailable for call {call_id}") from exc
+        return AudioSource(url=url, size_bytes=size)

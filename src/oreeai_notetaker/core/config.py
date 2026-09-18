@@ -1,6 +1,9 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+TranscriptionProvider = Literal["deepgram", "stub"]
 
 
 class Settings(BaseSettings):
@@ -50,6 +53,15 @@ class Settings(BaseSettings):
     s3_presign_ttl_seconds: int = 3600
     audio_retention_days: int = 0
     failed_audio_retention_days: int = 7
+
+    # PR 7 — transcription. Provider is settled (Deepgram, nova-3 batch);
+    # "stub" is the dev/staging stand-in (honest empty transcript, no
+    # network). Optional so the API process starts without it: unset means
+    # dev/staging falls back to stub with a loud warning, production
+    # fail-fasts when the transcription service is built (runner startup).
+    transcription_provider: TranscriptionProvider | None = None
+    deepgram_api_key: str | None = None
+    audio_max_bytes: int = 2147483648
 
     cors_origins: list[str] = []
 

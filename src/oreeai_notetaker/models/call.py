@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import JSON, Boolean, DateTime, Enum, Index, Integer, Text, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from oreeai_notetaker.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -36,7 +37,13 @@ class Call(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     end_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     audio_url: Mapped[str | None] = mapped_column(Text, nullable=True)
-    transcript: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    # JSONB on Postgres (PR 7 migration converts the PR 5-era JSON column
+    # in place); plain JSON elsewhere (SQLite tests). Service code always
+    # round-trips via the Pydantic model — never Postgres-specific JSONB
+    # operators.
+    transcript: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=True
+    )
     webhook_url: Mapped[str] = mapped_column(Text, nullable=False)
     webhook_secret: Mapped[str] = mapped_column(Text, nullable=False)
     webhook_delivered_at: Mapped[datetime | None] = mapped_column(

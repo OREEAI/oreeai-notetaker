@@ -175,6 +175,18 @@ beyond the retention policy) is not implemented yet — it needs its own
 endpoint and will be a follow-up. The retention policy above is the
 baseline.
 
+## Transcription
+
+Recordings are transcribed by **Deepgram** (`nova-3`, pre-recorded
+batch) with speaker diarization (`diarize_model=latest`); the segments
+land in `Call.transcript` (JSONB) and in the webhook payload. Provider
+choice, request shape, error mapping, and the pending realtime
+confirmation are documented in
+[docs/transcription.md](docs/transcription.md). Locally (no
+credentials), `TRANSCRIPTION_PROVIDER` unset falls back to a stub that
+lands every call `done` with an empty transcript — production
+fail-fasts without a real provider.
+
 ## Layout
 
 ```

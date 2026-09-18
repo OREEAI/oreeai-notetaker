@@ -16,6 +16,8 @@ import uuid
 from pathlib import Path
 from typing import Protocol
 
+from pydantic import BaseModel, model_validator
+
 
 class ObjectStorageError(Exception):
     """Base class for typed object-storage failures."""
@@ -46,6 +48,47 @@ class DeleteFailed(ObjectStorageError):
     missing object is never a failure; the retention sweep relies on
     that.
     """
+
+
+class SourceUnavailable(ObjectStorageError):
+    """Raised when the stored audio cannot be made transcribable.
+
+    Raised by ``transcribable_source`` when the stored object is gone
+    (HEAD 404, missing local copy) or unreadable — the upload already
+    succeeded, so this is an operational anomaly, not an upload failure.
+    Raised with a call-id-only message: provider exceptions (which embed
+    the object key) are chained but never carried in the text.
+    """
+
+
+class AudioSource(BaseModel):
+    """Where the transcription provider gets the audio from (PR 7).
+
+    The transport strategy is owned by the storage adapter, not by the
+    caller: the Deepgram pre-recorded API accepts both a fetchable URL
+    (provider fetches; presigned, time-limited) and a raw binary body
+    (we upload the bytes ourselves; used by the dev-local adapter whose
+    ``file://`` location is not fetchable by a remote provider).
+
+    Exactly one of ``url`` / ``local_path`` is set:
+
+    - ``url`` — presigned, time-limited GET link (presigned-only
+      serving rule intact; never a public link). Built by the S3
+      adapter from ``S3_PRESIGN_TTL_SECONDS``.
+    - ``local_path`` — the adapter's own stored copy on this host.
+      Dev-only; never leaves the host except as request bytes handed
+      to the provider. Callers must never log it (standing rule).
+    """
+
+    url: str | None = None
+    local_path: Path | None = None
+    size_bytes: int
+
+    @model_validator(mode="after")
+    def _exactly_one_source(self) -> "AudioSource":
+        if (self.url is None) == (self.local_path is None):
+            raise ValueError("AudioSource requires exactly one of url or local_path")
+        return self
 
 
 def audio_key(call_id: uuid.UUID) -> str:
@@ -87,5 +130,19 @@ class ObjectStorageClient(Protocol):
 
         Audio is served only through presigned URLs — never public
         links (PR 7's provider fetch consumes this).
+        """
+        ...
+
+    async def transcribable_source(self, call_id: uuid.UUID, *, ttl_seconds: int) -> AudioSource:
+        """Build the ``AudioSource`` the transcription provider consumes.
+
+        Transport strategy per adapter: S3 → presigned GET URL
+        (provider fetches; ``ttl_seconds`` bounds the link) with the
+        size from ``head_object``; local → the stored copy's own path
+        (the provider never fetches; the transcription adapter POSTs
+        the bytes) with the size from ``stat``.
+
+        Raises ``SourceUnavailable`` (call-id-only message) when the
+        stored object is gone or unreadable.
         """
         ...
