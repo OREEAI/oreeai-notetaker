@@ -1,0 +1,14 @@
+# Nightly Postgres backup for the note-taker stack (PR 8).
+#
+# Install on the VPS host (as root):
+#   sudo mkdir -p /var/log/oreeai
+#   crontab -e
+# then paste the line below. Verify with `crontab -l`.
+#
+# 03:00 host time with the box otherwise quiet (keep the VPS clock on
+# UTC). pg_dump does not lock writes, but deploys should still avoid this
+# minute (see deploy/README.md).
+#
+# The log line is the script's own output (path + size + retention), never
+# any secret or user data.
+0 3 * * * /opt/oreeai/deploy/backup.sh >> /var/log/oreeai/backup.log 2>&1
