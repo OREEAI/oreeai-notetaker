@@ -91,8 +91,11 @@ Confirm the fix with a real call, then forward-fix on a new tag
 ## If the database itself is wrong (not the code)
 
 Use the product restore path — it stops `api` + `bot-runner`, restores
-the chosen dump into the live database, restarts the services and runs
-the smoke test:
+the chosen dump into the live database, runs `alembic upgrade head` (an
+older dump is brought up to the running release's schema; a dump whose
+revision this release does not know is left untouched with a warning —
+the additive state a code rollback deliberately keeps), starts the
+services (waiting on their healthchecks) and runs the smoke test:
 
 ```bash
 /opt/oreeai/deploy/restore.sh /var/lib/oreeai/backups/<file> --target-prod --yes

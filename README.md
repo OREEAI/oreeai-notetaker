@@ -56,7 +56,10 @@ default 30; the newest dump is never deleted). Dumps land in
 [deploy/restore.sh](deploy/restore.sh) restores a dump into a throwaway
 database by default (`oreeai_restore_test`) — use that to rehearse. The
 deliberate recovery path is `--target-prod --yes`: it stops the services,
-restores the live database, restarts them, and runs the smoke test.
+restores the live database, runs `alembic upgrade head` (an older dump is
+brought up to the running release; a revision unknown to the release is
+left untouched with a warning), starts the services and waits on their
+healthchecks, then runs the smoke test.
 
 ## Common commands
 

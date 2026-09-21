@@ -231,7 +231,13 @@ the live database is never touched):
 ```
 
 A deliberate product restore (real disaster recovery) is explicit and
-stops/re-starts the services around the restore:
+stops/re-starts the services around the restore. It also runs
+`alembic upgrade head` before restarting, so a dump older than the
+running release is brought up to the current schema; a dump whose
+revision is unknown to the release (ahead of it, or from a divergent
+history) is left untouched with a warning — that is the additive-schema
+state a code rollback deliberately keeps. Services are started and
+waited on by healthcheck before the smoke test runs:
 
 ```bash
 /opt/oreeai/deploy/restore.sh /var/lib/oreeai/backups/<file> --target-prod --yes

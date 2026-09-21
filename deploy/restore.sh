@@ -4,9 +4,11 @@
 # Default target is a THROWAWAY database (oreeai_restore_test): the dump
 # is dropped, recreated and restored there so the rehearsal proves the
 # backup is restorable without touching the live database. Restoring the
-# live database is an explicit, confirmed action (--target-prod --yes)
-# that also stops the api + bot-runner services first and re-runs
-# deploy/smoke.sh afterwards.
+# live database is an explicit, confirmed action (--target-prod --yes):
+# stop api + bot-runner, drop/recreate/restore, alembic upgrade head (an
+# older dump is brought up to the running release; a revision unknown to
+# the release is left untouched with a warning), start the services and
+# wait for their healthchecks, then run deploy/smoke.sh.
 #
 # Usage:
 #   deploy/restore.sh /var/lib/oreeai/backups/oreeai-20260921T030000Z.sql.gz
@@ -14,7 +16,8 @@
 #   deploy/restore.sh <dump> --target-prod --yes
 #
 # Overridable (environment first, then .env):
-#   COMPOSE_FILE, POSTGRES_USER, POSTGRES_DB, DB_SERVICE, RESTORE_TEST_DB
+#   COMPOSE_FILE, POSTGRES_USER, POSTGRES_DB, DB_SERVICE, RESTORE_TEST_DB,
+#   RESTORE_WAIT_TIMEOUT (seconds to wait for service health, default 180)
 #
 # Exit codes: 0 success; 1 restore failed; 2 usage/configuration error.
 set -euo pipefail
@@ -24,6 +27,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ENV_FILE="${ENV_FILE:-${REPO_ROOT}/.env}"
 COMPOSE_FILE="${COMPOSE_FILE:-${REPO_ROOT}/docker-compose.prod.yml}"
 DB_SERVICE="${DB_SERVICE:-db}"
+RESTORE_WAIT_TIMEOUT="${RESTORE_WAIT_TIMEOUT:-180}"
 
 usage() {
   echo "usage: $(basename "$0") <backup.sql.gz> [--target DB] [--target-prod --yes]" >&2
@@ -165,8 +169,38 @@ if [[ ! "${calls}" =~ ^[0-9]+$ ]]; then
 fi
 
 if ((TARGET_PROD)); then
-  echo "restore: starting api + bot-runner"
-  compose start api bot-runner >/dev/null
+  # A dump may predate the running release (disaster recovery from an
+  # older backup): bring the schema up to the code's head before the
+  # services run against it. A revision unknown to the running release
+  # (backup taken while a newer version ran, then the code was rolled
+  # back) is left untouched with a warning — that is the rollback
+  # path's endorsed additive-schema state. `run --rm` because exec needs
+  # a running container (api is stopped) and --no-deps because only db
+  # is needed.
+  echo "restore: running migrations (a dump may predate the running release)"
+  if ! migration_output="$(compose run --rm --no-deps api alembic upgrade head 2>&1)"; then
+    if [[ "${migration_output}" == *"Can't locate revision"* ]]; then
+      echo "restore: WARN — the restored database's revision is unknown to this release;" >&2
+      echo "         leaving the schema untouched (it is ahead of this release or from" >&2
+      echo "         a divergent history: deploy the matching release, or confirm this" >&2
+      echo "         code tolerates the restored schema)" >&2
+    else
+      echo "restore: FAIL — alembic upgrade head failed after restoring ${TARGET};" >&2
+      echo "         inspect with: docker compose -f ${COMPOSE_FILE} run --rm --no-deps api alembic upgrade head" >&2
+      leave_stopped_note
+      exit 1
+    fi
+  fi
+  # Start and wait for the service healthchecks (api's includes a
+  # runner-heartbeat check; bot-runner's start period is 90 s). Waiting
+  # on health instead of a fixed sleep keeps the readiness signal in one
+  # place and matches what the deploy README documents.
+  echo "restore: starting api + bot-runner (waiting for health, up to ${RESTORE_WAIT_TIMEOUT}s)"
+  if ! compose up -d --wait --wait-timeout "${RESTORE_WAIT_TIMEOUT}" api bot-runner >/dev/null; then
+    echo "restore: FAIL — api/bot-runner did not become healthy within ${RESTORE_WAIT_TIMEOUT}s" >&2
+    compose ps >&2 || true
+    exit 1
+  fi
   if ! "${SCRIPT_DIR}/smoke.sh"; then
     echo "restore: FAIL — smoke test failed after restoring ${TARGET}" >&2
     exit 1
