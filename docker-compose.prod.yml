@@ -1,0 +1,219 @@
+# Production stack (PR 8) — the OreeAI VPS deploy, standalone from OreeAI's
+# own stack. Dev uses docker-compose.yml (`make docker-up`); this file is
+# the VPS form.
+#
+# Standing rules this file implements (locked by
+# tests/deploy/test_prod_compose_docker.py):
+#   - NO port is ever published on a wildcard host address. `api` binds
+#     `db` and `redis` are not published at all (OreeAI PR #48 lesson).
+#   - The docker socket is mounted on `bot-runner` ONLY. The api process
+#     never gets it; bot-runner is the most privileged container in the
+#     stack, deliberately (see deploy/README.md).
+#   - Every service has a healthcheck, a restart policy, and a 10m x 5
+#     json-file log cap.
+#
+# Configuration comes from `.env` (gitignored; created from
+# deploy/env.example). The runner fail-fasts at startup on broken storage
+# or transcription config, so production requires the 5 S3_* vars,
+# TRANSCRIPTION_PROVIDER=deepgram, DEEPGRAM_API_KEY and API_KEY in `.env`
+# — this file wires them through, it does not validate them.
+#
+# Usage (see deploy/README.md for the end-to-end procedure):
+#   docker compose -f docker-compose.prod.yml up -d --build
+#   docker compose -f docker-compose.prod.yml --profile build build bot
+name: oreeai
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-app-image: &app-image oreeai-api:${API_IMAGE_TAG:-v0.1.0}
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-oreeai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-oreeai}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Bind mount for operator access to dumps (deploy/backup.sh streams
+      # through the host; this mount is the manual/`pg_dump -f` path).
+      - ${BACKUPS_HOST_PATH:-/var/lib/oreeai/backups}:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-oreeai} -d ${POSTGRES_DB:-oreeai}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    logging: *default-logging
+    networks: [oreeai_internal]
+    # No ports: Postgres is reachable on the internal network only.
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    logging: *default-logging
+    networks: [oreeai_internal]
+    # No ports: Redis is reachable on the internal network only.
+
+  api:
+    image: *app-image
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-oreeai}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-oreeai}
+      REDIS_URL: redis://redis:6379/0
+      CACHE_ENABLED: ${CACHE_ENABLED:-true}
+      CACHE_PREFIX: ${CACHE_PREFIX:-oreeai}
+      CACHE_TTL_SECONDS: ${CACHE_TTL_SECONDS:-300}
+      API_KEY: ${API_KEY:?API_KEY is required in .env}
+      CALL_CONCURRENCY_LIMIT: ${CALL_CONCURRENCY_LIMIT:-3}
+      WEBHOOK_HTTP_TIMEOUT: ${WEBHOOK_HTTP_TIMEOUT:-10}
+      WEBHOOK_MAX_ATTEMPTS: ${WEBHOOK_MAX_ATTEMPTS:-5}
+      WEBHOOK_TIMESTAMP_SKEW: ${WEBHOOK_TIMESTAMP_SKEW:-300}
+      CORS_ORIGINS: ${CORS_ORIGINS:-[]}
+    ports:
+      # Loopback only — never "8000:8000" (PR #48 lesson). API_HOST_PORT
+      # is overridable because OreeAI's stack shares the host.
+      - "127.0.0.1:${API_HOST_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$API_KEY\" http://127.0.0.1:8000/api/v1/health >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging: *default-logging
+    networks: [oreeai_internal]
+
+  # The only thing that talks to the docker socket: it spawns bot
+  # containers with the PR 4 envelope. Same image/build as `api` (the
+  # runtime already carries docker-ce-cli and the redis client), with the
+  # entrypoint overridden to the runner module. See deploy/README.md
+  # ("Which image carries the runner").
+  bot-runner:
+    image: *app-image
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "oreeai_notetaker.workers.bot_runner"]
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Resource envelope for the runner itself; spawned bots are the heavy
+    # ones and carry the PR 4 limits (2g / 1.5 cpus / 512 pids each).
+    mem_limit: 1g
+    cpus: "0.5"
+    pids_limit: 256
+    # Non-root container user needs the host's docker group to drive the
+    # socket: set DOCKER_GID in .env from `stat -c '%g' /var/run/docker.sock`.
+    group_add:
+      - "${DOCKER_GID:-999}"
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-oreeai}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-oreeai}
+      REDIS_URL: redis://redis:6379/0
+      API_KEY: ${API_KEY:?API_KEY is required in .env}
+      AUDIO_HOST_PATH: ${AUDIO_HOST_PATH:-/var/lib/oreeai/audio}
+      BOT_PROFILE: ${BOT_PROFILE:-/var/lib/oreeai/chrome-profile}
+      BOT_PROFILE_DIR: ${BOT_PROFILE_DIR:-/profile}
+      CALL_CONCURRENCY_LIMIT: ${CALL_CONCURRENCY_LIMIT:-3}
+      BOT_IMAGE_TAG: ${BOT_IMAGE_TAG:-v0.1.0}
+      BOT_DOCKER_NETWORK: ${BOT_DOCKER_NETWORK:-oreeai_internal}
+      BOT_AUTH_MODE: ${BOT_AUTH_MODE:-authenticated}
+      BOT_WAITING_ROOM_TIMEOUT: ${BOT_WAITING_ROOM_TIMEOUT:-600}
+      BOT_EMPTY_ROOM_TIMEOUT: ${BOT_EMPTY_ROOM_TIMEOUT:-300}
+      BOT_ALONE_GRACE: ${BOT_ALONE_GRACE:-60}
+      BOT_MAX_RECORD_DURATION: ${BOT_MAX_RECORD_DURATION:-10800}
+      BOT_SILENCE_RMS_FLOOR: ${BOT_SILENCE_RMS_FLOOR:-50}
+      CONSENT_ACK: ${CONSENT_ACK:-true}
+      TZ: ${TZ:-UTC}
+      WEBHOOK_HTTP_TIMEOUT: ${WEBHOOK_HTTP_TIMEOUT:-10}
+      WEBHOOK_MAX_ATTEMPTS: ${WEBHOOK_MAX_ATTEMPTS:-5}
+      WEBHOOK_TIMESTAMP_SKEW: ${WEBHOOK_TIMESTAMP_SKEW:-300}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
+      S3_REGION: ${S3_REGION:-}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      S3_SSE: ${S3_SSE:-AES256}
+      S3_PRESIGN_TTL_SECONDS: ${S3_PRESIGN_TTL_SECONDS:-3600}
+      AUDIO_RETENTION_DAYS: ${AUDIO_RETENTION_DAYS:-0}
+      FAILED_AUDIO_RETENTION_DAYS: ${FAILED_AUDIO_RETENTION_DAYS:-7}
+      TRANSCRIPTION_PROVIDER: ${TRANSCRIPTION_PROVIDER:-}
+      DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY:-}
+      AUDIO_MAX_BYTES: ${AUDIO_MAX_BYTES:-2147483648}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Host path == container path: the runner passes this path to the
+      # spawned bot's --mount, so both views must be the same directory.
+      - ${AUDIO_HOST_PATH:-/var/lib/oreeai/audio}:/var/lib/oreeai/audio
+      # Read-only: the runner copies it per call (Chrome SingletonLock
+      # forbids sharing one live profile dir).
+      - ${BOT_PROFILE:-/var/lib/oreeai/chrome-profile}:/var/lib/oreeai/chrome-profile:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import os, redis, sys; r = redis.Redis.from_url(os.environ['REDIS_URL']); sys.exit(0 if r.exists(os.environ.get('CACHE_PREFIX', 'oreeai') + ':runner:heartbeat') else 1)"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # Generous: startup includes the storage/transcription fail-fast
+      # checks, the orphan sweep, and the first 10 s heartbeat.
+      start_period: 90s
+    logging: *default-logging
+    networks: [oreeai_internal]
+
+  # Build-only helper: `docker compose -f docker-compose.prod.yml
+  # --profile build build bot` builds the bot image (bot/Dockerfile) and
+  # tags it oreeai-bot:${BOT_IMAGE_TAG}, the tag the runner spawns. It is
+  # profile-gated so a plain `up -d` never starts or builds it. The bot
+  # image is deliberately separate from the app image: Chromium/Playwright
+  # have nothing to do with the API/runner Python env.
+  bot:
+    image: oreeai-bot:${BOT_IMAGE_TAG:-v0.1.0}
+    profiles: ["build"]
+    build:
+      context: .
+      dockerfile: bot/Dockerfile
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
+    restart: "no"
+    logging: *default-logging
+    networks: [oreeai_internal]
+
+volumes:
+  pgdata:
+    # Explicit name: the stack must be able to move between compose
+    # projects without renaming the volume that holds the product.
+    name: oreeai_pgdata
+
+networks:
+  # Explicit name: the runner spawns bots with BOT_DOCKER_NETWORK=oreeai_internal,
+  # so the network must exist under exactly that name (a missing network
+  # makes every spawn die exit 125). Pre-flight: `docker network ls`.
+  oreeai_internal:
+    name: oreeai_internal
