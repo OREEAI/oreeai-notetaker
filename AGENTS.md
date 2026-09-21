@@ -18,7 +18,7 @@ make dev              # run dev server with hot reload (localhost:8000)
 make test             # pytest (uses in-memory SQLite, no Postgres needed)
 make lint             # ruff check + format check
 make format           # ruff autofix + format
-make typecheck        # mypy strict; src/ today, src/ + bot/ once PR 1 lands
+make typecheck        # mypy strict (src/ + bot/)
 make makemigrations m="add x"   # autogenerate alembic migration (needs DB running)
 make migrate          # alembic upgrade head
 make bot-probe          # in-container browser probe (launch config + fingerprint)
@@ -44,7 +44,7 @@ api/  ->  services/  ->  repositories/  ->  models (SQLAlchemy)
 - **`schemas/`**: Pydantic DTOs. `*Create`, `*Update` (all-optional patch semantics via `model_dump(exclude_unset=True)`), `*Read` (with `from_attributes`).
 - **`core/`**: Cross-cutting: `config.py` (pydantic-settings; add new env vars here), `cache.py` (`CacheService`, Redis-backed, degrades gracefully to no-op when Redis is down), `exceptions.py` (`AppError` subclasses are mapped to HTTP responses automatically in `main.py`).
 - **`integrations/`**: External platform clients (Google Meet; Zoom returns in phase 2). Implement the `CallPlatformClient` protocol in `integrations/base.py`. Adapters only — no business logic here.
-- **`workers/`**: Background job hooks (meeting bots, transcription, summarization). Currently process-local placeholders; swap call sites to a queue (Celery/ARQ) later without touching services.
+- **`workers/`**: the long-running bot-runner (polls `Call` rows, spawns bot containers, and is the only docker-socket holder), the retention sweep, and the signed webhook dispatcher. The runner's internal loop can move to a queue (Celery/ARQ) later without touching services.
 
 **Transaction policy**: repositories flush but never commit. `get_db` in `api/deps.py` commits on request success and rolls back on any exception. Services can therefore compose multiple repo calls atomically.
 
@@ -64,38 +64,30 @@ Use the existing Calls feature (`models/call.py` → `api/v1/calls.py`) as the r
 
 ## Conventions
 
-- mypy **strict** passes on `src/` (and on `bot/` once PR 1 lands — PR 1 adds `bot` to `tool.mypy.files`) — keep it that way; annotate everything
+- mypy **strict** passes on `src/` and `bot/` — keep it that way; annotate everything
 - ruff is the formatter and linter (line length 100); run `make format` before committing
 - Tests run on in-memory SQLite via fixtures in `tests/conftest.py`; no external services required
 - Config comes from environment variables (see `.env.example`); never hardcode credentials; never commit `.env`
 - Logging via stdlib `logging` (`setup_logging` in `core/logging.py`); no print statements
-- **Manual scenarios get automated mirrors:** every PR ships automated equivalents of its "You test this" scenarios wherever CI allows them — pure unit tests plus `docker`-marked integration tests (`tests/`, registered in `pyproject.toml`; skip cleanly when no daemon or required image is present). What inherently stays human (real Meet behavior, host-level OOM effects, VPS ops) is listed explicitly in the chunk's runbook, and the PR body carries the triage. See `tests/workers/test_bot_runner_docker.py` for the two-tier pattern.
+- **Manual scenarios get automated mirrors:** every PR ships automated equivalents of its manual test scenarios wherever CI allows them — pure unit tests plus `docker`-marked integration tests (`tests/`, registered in `pyproject.toml`; skip cleanly when no daemon or required image is present). What inherently stays human (real Meet behavior, host-level OOM effects, VPS ops) is listed explicitly in the PR description, and the PR body carries the triage. See `tests/workers/test_bot_runner_docker.py` and `tests/deploy/` for the tiered patterns.
 
 ## Git workflow
 
 - **Feature branching with squash & merge**: branch off `main` as `feat/<name>`, `fix/<name>`, or `chore/<name>`; PRs are squash-merged to `main`, so keep branch history noisy but write a clean squash commit message
 - CI must pass before merge: **Lint** (`.github/workflows/lint.yml` — ruff, mypy) and **CI** (`.github/workflows/ci.yml` — pytest)
 
-## Plans folder
-
-`plans/` is gitignored and holds working design documents (`*.md`, `*.pdf`, `*.txt`). Put architecture plans, specs, and notes there — never commit them.
-
-## Work ledger
-
-`plans/note-taker-prs.md` is the authoritative work queue for phase 1 (call note taker). **Read its Status Ledger before picking up work**; update the ledger and the relevant chunk's Handoff Notes whenever a chunk starts, finishes, or gets blocked. The doc also defines the shared contracts (exit codes, status machine, webhook spec, env-var inventory) that all call-service work cross-references — do not redefine them in a PR.
-
 ## Bot (`bot/`)
 
-- `bot/` is a **separate deployable**, not part of the `oreeai_notetaker` Python package. It must never import `src/oreeai_notetaker`, and the service must never import `bot/`. The only contract between them is the container boundary and the bot's exit-code table (see `bot/README.md` and the Shared contracts in `plans/note-taker-prs.md`).
+- `bot/` is a **separate deployable**, not part of the `oreeai_notetaker` Python package. It must never import `src/oreeai_notetaker`, and the service must never import `bot/`. The only contract between them is the container boundary and the bot's exit-code table (see `bot/README.md`).
 - Bot code uses the **sync Playwright API** (it's a standalone process; async buys nothing here).
 - All Meet DOM selectors live in `bot/selectors.py` (aria-label/role based, `en-US` locale forced). A Meet UI change should be a one-file fix, not a hunt through call sites.
-- Bot scripts are held to the same ruff + mypy standards as `src/` (PR 1 extends `tool.mypy.files` to include `bot/`).
+- Bot scripts are held to the same ruff + mypy standards as `src/`.
 
 ## Standing rules
 
-- **Never log audio bytes or recording paths paired with `user_ref`.** Encryption at rest lands in PR 6; until then treat any local audio file as sensitive.
+- **Never log audio bytes or recording paths paired with `user_ref`.** Stored objects are encrypted at rest on the S3 path (`S3_SSE`; the dev/staging local fallback is not); local scratch WAVs are deleted once the stored copy has been transcribed (or transcription has permanently failed) and are never shipped anywhere — treat any local audio file as sensitive.
 - **`user_ref` is an opaque string:** never parsed, enriched, foreign-keyed, or joined across systems. This service is a strict emitter; OreeAI's database is never written to.
 - **The transcription provider must support both batch and realtime on one account** (Deepgram or AssemblyAI). **Never Whisper** — it streams poorly and the phase 3 live-trainer needs realtime.
 - **Production compose never publishes ports to `0.0.0.0`** — loopback or internal network only. Lesson from OreeAI PR #48. (The dev `docker-compose.yml` is exempt; `docker-compose.prod.yml` is not.)
 - **All `/api/v1` routes require `X-API-Key`** matching the `API_KEY` env var, including `/health`. Keep this even though the API runs on a loopback/internal network in phase 1; auth-uniform is easier to reason about than exemptions. Webhook receivers verify HMAC separately — that is unrelated to API auth.
-- **Bot-runner, not the API process, owns the docker socket.** The standalone `bot-runner` service is the only thing that spawns bot containers; the API process never gets the docker socket. See the orchestration architecture diagram in `plans/note-taker-prs.md` under Shared contracts.
+- **Bot-runner, not the API process, owns the docker socket.** The standalone `bot-runner` service is the only thing that spawns bot containers; the API process never gets the docker socket (see the orchestration notes in `deploy/README.md` and the call lifecycle in `README.md`).

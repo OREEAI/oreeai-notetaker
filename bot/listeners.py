@@ -4,7 +4,7 @@ This module owns polling, timing, transitions, recording triggers, and
 leaving. :mod:`bot.states` stays pure; :mod:`bot.join_meet` owns browser
 startup/shutdown, configuration, and the process exit code.
 
-Exit codes follow the Shared contracts table:
+Exit codes follow the table in bot/README.md:
 
 - ``0``: clean end. ``end_reason`` is one of ``call_ended``, ``removed`` is
   exit 3, ``alone``, or ``give_up``.

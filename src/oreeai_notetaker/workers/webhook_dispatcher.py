@@ -9,7 +9,8 @@ receiver answered, retrying cannot help); 5xx and network errors retry.
 ``webhook_secret`` never appears in the payload, in logs, or anywhere
 outside the HMAC computation. The dispatcher never raises into the
 runner: unexpected errors are logged and left for the next terminal
-event or a manual replay.
+event (there is no durable queue or replay path — delivery is bounded
+retry inside one terminal transition).
 """
 
 import asyncio

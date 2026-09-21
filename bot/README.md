@@ -143,7 +143,7 @@ The bot is spawned by the **DB-driven runner** in the service package:
 `SELECT ... FOR UPDATE SKIP LOCKED`, re-checks the
 `CALL_CONCURRENCY_LIMIT` ceiling and free disk before each spawn, streams
 bot output tagged with `call_id`, maps bot exit codes through the
-shared-contracts table, heartbeats Redis every 10 s
+table above, heartbeats Redis every 10 s
 (`oreeai:runner:heartbeat`), sweeps orphans on startup and stale calls
 every 60 s, and fires the signed webhook on every terminal transition.
 The PR 4 precursor (`bot/runner.py`, lockfile-based) is deleted; its
@@ -292,7 +292,7 @@ unknown count is never treated as an empty room.
 | 4 | Lifecycle timeout: waiting in an unstarted/empty room after admission | `failed`; the runner reports `join_timeout` when the bot never recorded and `no_show` when it recorded an empty room |
 | 5 | Unexpected bot error: pre-join failure, blocked join attempt, dead recorder, or unavailable room detection | `failed`, `failure_reason=bot_error:<detail>` |
 | 6 | `CONSENT_ACK` not true (or unset); refused before any browser launch | `failed`, `failure_reason=consent_missing` |
-| 7 | A finished clean recording is below `BOT_SILENCE_RMS_FLOOR` | `failed`, `failure_reason=silent_recording` |
+| 7 | A finished clean recording is below `BOT_SILENCE_RMS_FLOOR` | `failed`, `failure_reason=silent_recording` — except alone-via-silence (the bot reported `end_reason=alone`), which lands `done`, `end_reason=alone` |
 
 The bot also emits one machine-readable terminal line for the future runner:
 

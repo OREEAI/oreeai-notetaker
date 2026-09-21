@@ -4,14 +4,15 @@ Long-running poller invoked as::
 
     python -m oreeai_notetaker.workers.bot_runner
 
-Owns the orchestration contract from the plan doc's shared section:
+Owns the orchestration contract (README.md, Call lifecycle):
 polls ``Call`` rows (2 s), claims work with
 ``SELECT ... FOR UPDATE SKIP LOCKED`` so a second runner instance is
 harmless (exactly one runner is the supported configuration), re-checks
 the concurrency ceiling and free disk race-free against the API, spawns
 the bot container with the PR 4 resource envelope (``--rm``, never a
 restart flag — the streaming wait owns the exit), streams bot output
-tagged with ``call_id``, maps bot exit codes through the shared table,
+tagged with ``call_id``, maps bot exit codes through the table in
+bot/README.md,
 uploads the scratch WAV to object storage, transcribes it (PR 7 —
 the ``processing -> done`` transition is driven by the real transcript
 landing; the honest-empty ``[]`` is legitimate for a muted call),
@@ -317,7 +318,7 @@ async def apply_exit_status(
     storage: ObjectStorageService | None = None,
     transcription: TranscriptionService | None = None,
 ) -> None:
-    """Map a bot exit through the shared table.
+    """Map a bot exit through the table in bot/README.md.
 
     Clean exits (0, and 3 = removed mid-call) and the disambiguated
     exit-7-``alone`` case run the PR 6 storage seam followed by the PR 7
