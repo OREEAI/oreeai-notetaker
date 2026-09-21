@@ -217,6 +217,60 @@ credentials), `TRANSCRIPTION_PROVIDER` unset falls back to a stub that
 lands every call `done` with an empty transcript — production
 fail-fasts without a real provider.
 
+## Call lifecycle
+
+A call moves through a strict status machine:
+
+```text
+queued -> joining -> recording -> processing -> done
+   |          |          |            |
+   +----------+----------+------------+------> failed
+```
+
+- **`queued`** — accepted by `POST /api/v1/calls` (API key, `consent_ack`,
+  and the concurrency ceiling are checked at intake).
+- **`joining` → `recording`** — the **bot-runner** (a standalone process,
+  and the only component with the docker socket) claims the row and spawns
+  an `oreeai-bot-<call_id>` container that joins the meeting and records a
+  16 kHz mono WAV.
+- **`processing`** — the recording ended; the WAV is uploaded to object
+  storage and transcribed.
+- **`done`** — the transcript is stored (JSONB) and the webhook has been
+  delivered (or given up on). `end_reason` records why the bot left:
+  `call_ended`, `removed` (partial transcript kept), `alone`, `give_up`.
+- **`failed`** — an operational failure. `failure_reason` is a short
+  machine string, for example `concurrency_limit`, `disk_full`,
+  `stale_call`, `worker_restart`, `upload_failed`, `join_timeout`, or
+  `transcription_failed:<detail>`; the bot-derived reasons
+  (`never_admitted`, `no_show`, `consent_missing`, `silent_recording`,
+  `bot_error:exit_<n>`, ...) and the exit-code table they map from are in
+  [bot/README.md](bot/README.md).
+
+Active statuses count against `CALL_CONCURRENCY_LIMIT`, enforced race-free
+at intake and again when the runner claims the call. The runner also
+sweeps stale calls (`stale_call`) and reaps orphaned bot containers after
+a restart (`worker_restart`).
+
+## Webhooks
+
+Every terminal transition (`done` / `failed`) is POSTed as JSON to the
+call's `webhook_url`, signed with the call's `webhook_secret`:
+
+- `X-OT-Timestamp` — unix seconds; receivers should reject stale
+  timestamps (`WEBHOOK_TIMESTAMP_SKEW`, default 300 s).
+- `X-OT-Signature` — hex HMAC-SHA256 over `{timestamp}:{raw_body}`.
+- Payload fields: `call_id`, `status`, `end_reason`, `failure_reason`,
+  `user_ref`, `transcript`, `audio_url`, `created_at`, `finished_at`.
+  The `audio_url` is a URI snapshot taken at completion; with immediate
+  retention the object may already be deleted (see Data retention).
+
+Delivery is at-least-once: up to 5 attempts (`WEBHOOK_MAX_ATTEMPTS`) with
+1/4/16/64/256 s backoff and a 10 s per-attempt timeout
+(`WEBHOOK_HTTP_TIMEOUT`). A 2xx marks the call delivered, a 4xx is a
+permanent give-up (the receiver answered; retrying cannot help), 5xx and
+network errors retry. `webhook_secret` never appears in the payload, in
+logs, or anywhere outside the HMAC computation.
+
 ## Layout
 
 ```
@@ -233,5 +287,4 @@ src/oreeai_notetaker/
 └── workers/        # background job hooks
 deploy/             # production compose procedure, backups, smoke, rollback
 docs/               # design notes (transcription)
-plans/              # local planning docs (gitignored)
 ```

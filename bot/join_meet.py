@@ -4,7 +4,7 @@ PR 2 lifecycle entry point: waiting room, late admission, never admitted,
 removals, empty rooms, alone grace, maximum recording duration, and clean
 shutdown. DOM predicates live in :mod:`bot.states`; polling, timing, state
 transitions, and recorder triggers live in :mod:`bot.listeners`. Exit codes
-follow the Shared contracts table, including 3 for removal, 4 for lifecycle
+follow the table in bot/README.md, including 3 for removal, 4 for lifecycle
 timeouts, and 7 when a clean recording is silent.
 
 Launches branded Google Chrome (channel="chrome"): Meet's server-side

@@ -18,7 +18,7 @@ make dev              # run dev server with hot reload (localhost:8000)
 make test             # pytest (uses in-memory SQLite, no Postgres needed)
 make lint             # ruff check + format check
 make format           # ruff autofix + format
-make typecheck        # mypy strict; src/ today, src/ + bot/ once PR 1 lands
+make typecheck        # mypy strict (src/ + bot/)
 make makemigrations m="add x"   # autogenerate alembic migration (needs DB running)
 make migrate          # alembic upgrade head
 make bot-probe          # in-container browser probe (launch config + fingerprint)
@@ -64,7 +64,7 @@ Use the existing Calls feature (`models/call.py` → `api/v1/calls.py`) as the r
 
 ## Conventions
 
-- mypy **strict** passes on `src/` (and on `bot/` once PR 1 lands — PR 1 adds `bot` to `tool.mypy.files`) — keep it that way; annotate everything
+- mypy **strict** passes on `src/` and `bot/` — keep it that way; annotate everything
 - ruff is the formatter and linter (line length 100); run `make format` before committing
 - Tests run on in-memory SQLite via fixtures in `tests/conftest.py`; no external services required
 - Config comes from environment variables (see `.env.example`); never hardcode credentials; never commit `.env`
@@ -76,26 +76,18 @@ Use the existing Calls feature (`models/call.py` → `api/v1/calls.py`) as the r
 - **Feature branching with squash & merge**: branch off `main` as `feat/<name>`, `fix/<name>`, or `chore/<name>`; PRs are squash-merged to `main`, so keep branch history noisy but write a clean squash commit message
 - CI must pass before merge: **Lint** (`.github/workflows/lint.yml` — ruff, mypy) and **CI** (`.github/workflows/ci.yml` — pytest)
 
-## Plans folder
-
-`plans/` is gitignored and holds working design documents (`*.md`, `*.pdf`, `*.txt`). Put architecture plans, specs, and notes there — never commit them.
-
-## Work ledger
-
-`plans/note-taker-prs.md` is the authoritative work queue for phase 1 (call note taker). **Read its Status Ledger before picking up work**; update the ledger and the relevant chunk's Handoff Notes whenever a chunk starts, finishes, or gets blocked. The doc also defines the shared contracts (exit codes, status machine, webhook spec, env-var inventory) that all call-service work cross-references — do not redefine them in a PR.
-
 ## Bot (`bot/`)
 
-- `bot/` is a **separate deployable**, not part of the `oreeai_notetaker` Python package. It must never import `src/oreeai_notetaker`, and the service must never import `bot/`. The only contract between them is the container boundary and the bot's exit-code table (see `bot/README.md` and the Shared contracts in `plans/note-taker-prs.md`).
+- `bot/` is a **separate deployable**, not part of the `oreeai_notetaker` Python package. It must never import `src/oreeai_notetaker`, and the service must never import `bot/`. The only contract between them is the container boundary and the bot's exit-code table (see `bot/README.md`).
 - Bot code uses the **sync Playwright API** (it's a standalone process; async buys nothing here).
 - All Meet DOM selectors live in `bot/selectors.py` (aria-label/role based, `en-US` locale forced). A Meet UI change should be a one-file fix, not a hunt through call sites.
-- Bot scripts are held to the same ruff + mypy standards as `src/` (PR 1 extends `tool.mypy.files` to include `bot/`).
+- Bot scripts are held to the same ruff + mypy standards as `src/`.
 
 ## Standing rules
 
-- **Never log audio bytes or recording paths paired with `user_ref`.** Encryption at rest lands in PR 6; until then treat any local audio file as sensitive.
+- **Never log audio bytes or recording paths paired with `user_ref`.** Stored objects are encrypted at rest (`S3_SSE`); local scratch WAVs are deleted right after upload and are never shipped anywhere — treat any local audio file as sensitive.
 - **`user_ref` is an opaque string:** never parsed, enriched, foreign-keyed, or joined across systems. This service is a strict emitter; OreeAI's database is never written to.
 - **The transcription provider must support both batch and realtime on one account** (Deepgram or AssemblyAI). **Never Whisper** — it streams poorly and the phase 3 live-trainer needs realtime.
 - **Production compose never publishes ports to `0.0.0.0`** — loopback or internal network only. Lesson from OreeAI PR #48. (The dev `docker-compose.yml` is exempt; `docker-compose.prod.yml` is not.)
 - **All `/api/v1` routes require `X-API-Key`** matching the `API_KEY` env var, including `/health`. Keep this even though the API runs on a loopback/internal network in phase 1; auth-uniform is easier to reason about than exemptions. Webhook receivers verify HMAC separately — that is unrelated to API auth.
-- **Bot-runner, not the API process, owns the docker socket.** The standalone `bot-runner` service is the only thing that spawns bot containers; the API process never gets the docker socket. See the orchestration architecture diagram in `plans/note-taker-prs.md` under Shared contracts.
+- **Bot-runner, not the API process, owns the docker socket.** The standalone `bot-runner` service is the only thing that spawns bot containers; the API process never gets the docker socket (see the orchestration notes in `deploy/README.md` and the call lifecycle in `README.md`).
