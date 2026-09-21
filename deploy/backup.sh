@@ -28,15 +28,22 @@ BACKUP_DIR="${BACKUP_DIR:-/var/lib/oreeai/backups}"
 DB_SERVICE="${DB_SERVICE:-db}"
 
 env_value() {
+  # env_value NAME — environment wins, else the last .env assignment
+  # (compose's dotenv semantics). Surrounding quotes are stripped to match
+  # compose interpolation; shell values are used literally.
   local name="$1"
-  local current="${!name:-}"
-  if [[ -n "${current}" ]]; then
-    printf '%s' "${current}"
+  if [[ -n "${!name:-}" ]]; then
+    printf '%s' "${!name}"
     return 0
   fi
-  if [[ -f "${ENV_FILE}" ]]; then
-    sed -n "s/^${name}=//p" "${ENV_FILE}" | tail -n 1 | tr -d '\r'
-  fi
+  [[ -f "${ENV_FILE}" ]] || return 0
+  local value
+  value="$(sed -n "s/^${name}=//p" "${ENV_FILE}" | tail -n 1 | tr -d '\r')"
+  value="${value#\"}"
+  value="${value%\"}"
+  value="${value#\'}"
+  value="${value%\'}"
+  printf '%s' "${value}"
 }
 
 POSTGRES_USER="${POSTGRES_USER:-$(env_value POSTGRES_USER)}"

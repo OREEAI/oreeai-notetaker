@@ -131,15 +131,17 @@ sudo mkdir -p /var/lib/oreeai/audio /var/lib/oreeai/backups /var/lib/oreeai/chro
 ```
 
 The containers run as the non-root `app` user. After the first build
-(step 6), learn its uid and give it ownership of the two dirs it writes:
+(step 6), learn its uid and give it ownership of the audio dir it writes:
 
 ```bash
 docker compose -f docker-compose.prod.yml run --rm --entrypoint id api
 # uid=999(app) gid=999(app) ...
-sudo chown -R 999:999 /var/lib/oreeai/audio /var/lib/oreeai/backups
+sudo chown -R 999:999 /var/lib/oreeai/audio
 sudo chmod 700 /var/lib/oreeai/chrome-profile
 ```
 
+`/var/lib/oreeai/backups` stays root-owned: host-side tooling (root cron
+running `deploy/backup.sh`) writes it, and the db container only reads it.
 The runner copies the Chrome profile into the audio volume per call; the
 profile directory itself is root-only (it holds a Google session — treat
 it like a password).
@@ -204,7 +206,7 @@ Also run this service's first real call (PR 4's deferred host-level test):
 under a bot OOM-kill, OreeAI's containers must keep running and its
 Postgres must stay up.
 
-## 12. Backups (nightly, 03:00 UTC)
+## 12. Backups (nightly, 03:00 host time)
 
 Install the cron line on the host:
 
@@ -238,12 +240,13 @@ stops/re-starts the services around the restore:
 Operations:
 
 - Schedule and retention: `BACKUP_CRON` (documented in `backup.cron`) and
-  `BACKUP_KEEP_DAYS` (default 30; the newest dump is never deleted).
+  `BACKUP_KEEP_DAYS` (default 30; the newest dump is never deleted). Cron
+  fires on the **host clock**; keep the VPS on UTC so 03:00 means 03:00 UTC.
 - Disk check: `du -sh /var/lib/oreeai/backups /var/lib/oreeai/audio`.
 - Cron survives reboot with the OS cron service; after a reboot verify
   with `crontab -l` and `systemctl status cron`.
-- Avoid deploys across 03:00 UTC; `pg_dump` does not lock writes, but a
-  quiet box makes a clean dump easier to reason about.
+- Avoid deploys across 03:00 (host time); `pg_dump` does not lock writes,
+  but a quiet box makes a clean dump easier to reason about.
 
 ## Tagging and roll-forward
 

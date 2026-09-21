@@ -101,3 +101,8 @@ the smoke test:
 Rehearse the default throwaway path first if there is any doubt:
 `deploy/restore.sh <file>` restores into `oreeai_restore_test` and leaves
 the live database untouched.
+
+If the manual restore could land near the nightly backup (03:00 host
+time), disable the cron line first (`crontab -e`, comment it out) and
+re-enable it after — a `pg_dump` firing mid-restore produces a dump of a
+database that is being dropped and recreated.

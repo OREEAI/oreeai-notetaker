@@ -5,8 +5,9 @@
 #   crontab -e
 # then paste the line below. Verify with `crontab -l`.
 #
-# 03:00 UTC with the box otherwise quiet. pg_dump does not lock writes,
-# but deploys should still avoid this minute (see deploy/README.md).
+# 03:00 host time with the box otherwise quiet (keep the VPS clock on
+# UTC). pg_dump does not lock writes, but deploys should still avoid this
+# minute (see deploy/README.md).
 #
 # The log line is the script's own output (path + size + retention), never
 # any secret or user data.

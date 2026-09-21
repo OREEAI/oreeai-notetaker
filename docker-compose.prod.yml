@@ -41,8 +41,9 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-oreeai}
     volumes:
       - pgdata:/var/lib/postgresql/data
-      # Bind mount for operator access to dumps (deploy/backup.sh streams
-      # through the host; this mount is the manual/`pg_dump -f` path).
+      # Operator-visible dump directory (deploy/backup.sh streams through
+      # the host into this path). The db container can read but not write
+      # it — use the streaming backup path, not `pg_dump -f /backups`.
       - ${BACKUPS_HOST_PATH:-/var/lib/oreeai/backups}:/backups
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-oreeai} -d ${POSTGRES_DB:-oreeai}"]
@@ -136,6 +137,10 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-oreeai}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-oreeai}
       REDIS_URL: redis://redis:6379/0
+      # Cache settings must match the api's: the runner writes the
+      # heartbeat at CACHE_PREFIX:runner:heartbeat, the api reads it.
+      CACHE_ENABLED: ${CACHE_ENABLED:-true}
+      CACHE_PREFIX: ${CACHE_PREFIX:-oreeai}
       API_KEY: ${API_KEY:?API_KEY is required in .env}
       AUDIO_HOST_PATH: ${AUDIO_HOST_PATH:-/var/lib/oreeai/audio}
       BOT_PROFILE: ${BOT_PROFILE:-/var/lib/oreeai/chrome-profile}
@@ -149,7 +154,9 @@ services:
       BOT_ALONE_GRACE: ${BOT_ALONE_GRACE:-60}
       BOT_MAX_RECORD_DURATION: ${BOT_MAX_RECORD_DURATION:-10800}
       BOT_SILENCE_RMS_FLOOR: ${BOT_SILENCE_RMS_FLOOR:-50}
-      CONSENT_ACK: ${CONSENT_ACK:-true}
+      # CONSENT_ACK is intentionally absent: the runner always passes
+      # CONSENT_ACK=true to spawned bots; the recording-consent gate is
+      # the API-level consent_ack flag on POST /calls.
       TZ: ${TZ:-UTC}
       WEBHOOK_HTTP_TIMEOUT: ${WEBHOOK_HTTP_TIMEOUT:-10}
       WEBHOOK_MAX_ATTEMPTS: ${WEBHOOK_MAX_ATTEMPTS:-5}

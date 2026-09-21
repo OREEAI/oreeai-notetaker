@@ -62,15 +62,22 @@ done
 [[ -n "${DUMP_FILE}" ]] || usage
 
 env_value() {
+  # env_value NAME — environment wins, else the last .env assignment
+  # (compose's dotenv semantics). Surrounding quotes are stripped to match
+  # compose interpolation; shell values are used literally.
   local name="$1"
-  local current="${!name:-}"
-  if [[ -n "${current}" ]]; then
-    printf '%s' "${current}"
+  if [[ -n "${!name:-}" ]]; then
+    printf '%s' "${!name}"
     return 0
   fi
-  if [[ -f "${ENV_FILE}" ]]; then
-    sed -n "s/^${name}=//p" "${ENV_FILE}" | tail -n 1 | tr -d '\r'
-  fi
+  [[ -f "${ENV_FILE}" ]] || return 0
+  local value
+  value="$(sed -n "s/^${name}=//p" "${ENV_FILE}" | tail -n 1 | tr -d '\r')"
+  value="${value#\"}"
+  value="${value%\"}"
+  value="${value#\'}"
+  value="${value%\'}"
+  printf '%s' "${value}"
 }
 
 POSTGRES_USER="${POSTGRES_USER:-$(env_value POSTGRES_USER)}"
@@ -105,17 +112,29 @@ if ! docker compose -f "${COMPOSE_FILE}" ps --status running -q "${DB_SERVICE}" 
   exit 2
 fi
 
-# Never drop and recreate the live database through the throwaway path:
-# the product restore is --target-prod --yes, which stops services and
-# smoke-tests afterwards. A bare --target <live-db-name> is a mistake.
-if ((!TARGET_PROD)) && [[ "${TARGET}" == "${POSTGRES_DB}" ]]; then
-  echo "restore: FAIL — refusing to restore into the live database via --target;" >&2
-  echo "         use --target-prod --yes for a deliberate product restore" >&2
-  exit 2
+# Never drop and recreate the live database (or a reserved maintenance
+# database) through the throwaway path: the product restore is
+# --target-prod --yes, which stops services and smoke-tests afterwards.
+if ((!TARGET_PROD)); then
+  case "${TARGET}" in
+    "${POSTGRES_DB}" | postgres | template0 | template1 | template*)
+      echo "restore: FAIL — refusing to restore into reserved database '${TARGET}' via --target;" >&2
+      echo "         use --target-prod --yes for a deliberate product restore," >&2
+      echo "         or a throwaway database name" >&2
+      exit 2
+      ;;
+  esac
 fi
 
 compose() {
   docker compose -f "${COMPOSE_FILE}" "$@"
+}
+
+leave_stopped_note() {
+  if ((TARGET_PROD)); then
+    echo "restore: NOTE — api and bot-runner were stopped and remain stopped;" >&2
+    echo "         fix the cause and re-run, or restore an earlier dump" >&2
+  fi
 }
 
 if ((TARGET_PROD)); then
@@ -132,6 +151,7 @@ echo "restore: loading ${DUMP_FILE} into ${TARGET}"
 if ! gunzip -c "${DUMP_FILE}" | compose exec -T "${DB_SERVICE}" \
   psql -U "${POSTGRES_USER}" -d "${TARGET}" -v ON_ERROR_STOP=1 --quiet >/dev/null; then
   echo "restore: FAIL — psql restore failed for ${TARGET}" >&2
+  leave_stopped_note
   exit 1
 fi
 
@@ -140,6 +160,7 @@ calls="$(compose exec -T "${DB_SERVICE}" psql -U "${POSTGRES_USER}" -d "${TARGET
   -tAc "SELECT count(*) FROM calls;" 2>/dev/null || true)"
 if [[ ! "${calls}" =~ ^[0-9]+$ ]]; then
   echo "restore: FAIL — restored database has no queryable calls table" >&2
+  leave_stopped_note
   exit 1
 fi
 

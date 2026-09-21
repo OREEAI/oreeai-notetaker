@@ -26,16 +26,22 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ENV_FILE="${ENV_FILE:-${REPO_ROOT}/.env}"
 
 env_value() {
-  # env_value VAR_NAME — environment wins, then .env, first match.
+  # env_value NAME — environment wins, else the last .env assignment
+  # (compose's dotenv semantics). Surrounding quotes are stripped to match
+  # compose interpolation; shell values are used literally.
   local name="$1"
-  local current="${!name:-}"
-  if [[ -n "${current}" ]]; then
-    printf '%s' "${current}"
+  if [[ -n "${!name:-}" ]]; then
+    printf '%s' "${!name}"
     return 0
   fi
-  if [[ -f "${ENV_FILE}" ]]; then
-    sed -n "s/^${name}=//p" "${ENV_FILE}" | tail -n 1 | tr -d '\r'
-  fi
+  [[ -f "${ENV_FILE}" ]] || return 0
+  local value
+  value="$(sed -n "s/^${name}=//p" "${ENV_FILE}" | tail -n 1 | tr -d '\r')"
+  value="${value#\"}"
+  value="${value%\"}"
+  value="${value#\'}"
+  value="${value%\'}"
+  printf '%s' "${value}"
 }
 
 API_KEY="$(env_value API_KEY)"

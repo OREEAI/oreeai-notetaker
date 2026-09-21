@@ -60,6 +60,28 @@ def env_file(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return path
 
 
+def _minimal_env() -> dict[str, str]:
+    """Hermetic environment for `docker compose config`.
+
+    Shell environment outranks `--env-file` during interpolation, so a
+    developer's exported `API_IMAGE_TAG`/`ENVIRONMENT` would otherwise
+    leak into the assertions. Only what the docker CLI needs to reach the
+    daemon is passed through.
+    """
+    env = {"PATH": os.environ.get("PATH", "")}
+    for name in (
+        "HOME",
+        "DOCKER_HOST",
+        "DOCKER_CONFIG",
+        "DOCKER_CONTEXT",
+        "XDG_RUNTIME_DIR",
+        "TMPDIR",
+    ):
+        if name in os.environ:
+            env[name] = os.environ[name]
+    return env
+
+
 def compose_config(
     env_file: Path,
     *,
@@ -70,9 +92,7 @@ def compose_config(
     for profile in profiles:
         argv.extend(["--profile", profile])
     argv.extend(["-f", COMPOSE_FILE, "--env-file", str(env_file), "config", "--format", "json"])
-    process_env = dict(os.environ)
-    for name in ("API_HOST_PORT", "ENVIRONMENT", "CACHE_ENABLED"):
-        process_env.pop(name, None)
+    process_env = _minimal_env()
     if env:
         process_env.update(env)
     result = subprocess.run(
@@ -200,3 +220,22 @@ def test_runner_gets_the_storage_and_transcription_env(config: dict[str, Any]) -
         "CALL_CONCURRENCY_LIMIT",
     ):
         assert required in environment, required
+
+
+def test_api_and_runner_share_cache_env(config: dict[str, Any]) -> None:
+    """The runner writes `<CACHE_PREFIX>:runner:heartbeat`; the api reads
+    the same key. A divergence (or a runner without the vars, falling back
+    to defaults) makes health report `runner: down` while the runner's own
+    healthcheck stays green."""
+    api_env = config["services"]["api"]["environment"]
+    runner_env = config["services"]["bot-runner"]["environment"]
+    for name in ("CACHE_ENABLED", "CACHE_PREFIX"):
+        assert name in api_env, f"api is missing {name}"
+        assert name in runner_env, f"bot-runner is missing {name}"
+        assert api_env[name] == runner_env[name], f"{name} differs between api and bot-runner"
+
+
+def test_runner_env_has_no_inert_bot_knobs(config: dict[str, Any]) -> None:
+    # CONSENT_ACK is hardcoded to true by the runner when it spawns bots;
+    # carrying it in the runner env would advertise a knob that does nothing.
+    assert "CONSENT_ACK" not in config["services"]["bot-runner"]["environment"]
