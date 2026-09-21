@@ -44,7 +44,7 @@ api/  ->  services/  ->  repositories/  ->  models (SQLAlchemy)
 - **`schemas/`**: Pydantic DTOs. `*Create`, `*Update` (all-optional patch semantics via `model_dump(exclude_unset=True)`), `*Read` (with `from_attributes`).
 - **`core/`**: Cross-cutting: `config.py` (pydantic-settings; add new env vars here), `cache.py` (`CacheService`, Redis-backed, degrades gracefully to no-op when Redis is down), `exceptions.py` (`AppError` subclasses are mapped to HTTP responses automatically in `main.py`).
 - **`integrations/`**: External platform clients (Google Meet; Zoom returns in phase 2). Implement the `CallPlatformClient` protocol in `integrations/base.py`. Adapters only — no business logic here.
-- **`workers/`**: Background job hooks (meeting bots, transcription, summarization). Currently process-local placeholders; swap call sites to a queue (Celery/ARQ) later without touching services.
+- **`workers/`**: the long-running bot-runner (polls `Call` rows, spawns bot containers, and is the only docker-socket holder), the retention sweep, and the signed webhook dispatcher. The runner's internal loop can move to a queue (Celery/ARQ) later without touching services.
 
 **Transaction policy**: repositories flush but never commit. `get_db` in `api/deps.py` commits on request success and rolls back on any exception. Services can therefore compose multiple repo calls atomically.
 
@@ -69,7 +69,7 @@ Use the existing Calls feature (`models/call.py` → `api/v1/calls.py`) as the r
 - Tests run on in-memory SQLite via fixtures in `tests/conftest.py`; no external services required
 - Config comes from environment variables (see `.env.example`); never hardcode credentials; never commit `.env`
 - Logging via stdlib `logging` (`setup_logging` in `core/logging.py`); no print statements
-- **Manual scenarios get automated mirrors:** every PR ships automated equivalents of its "You test this" scenarios wherever CI allows them — pure unit tests plus `docker`-marked integration tests (`tests/`, registered in `pyproject.toml`; skip cleanly when no daemon or required image is present). What inherently stays human (real Meet behavior, host-level OOM effects, VPS ops) is listed explicitly in the chunk's runbook, and the PR body carries the triage. See `tests/workers/test_bot_runner_docker.py` for the two-tier pattern.
+- **Manual scenarios get automated mirrors:** every PR ships automated equivalents of its manual test scenarios wherever CI allows them — pure unit tests plus `docker`-marked integration tests (`tests/`, registered in `pyproject.toml`; skip cleanly when no daemon or required image is present). What inherently stays human (real Meet behavior, host-level OOM effects, VPS ops) is listed explicitly in the PR description, and the PR body carries the triage. See `tests/workers/test_bot_runner_docker.py` and `tests/deploy/` for the tiered patterns.
 
 ## Git workflow
 
@@ -85,7 +85,7 @@ Use the existing Calls feature (`models/call.py` → `api/v1/calls.py`) as the r
 
 ## Standing rules
 
-- **Never log audio bytes or recording paths paired with `user_ref`.** Stored objects are encrypted at rest (`S3_SSE`); local scratch WAVs are deleted right after upload and are never shipped anywhere — treat any local audio file as sensitive.
+- **Never log audio bytes or recording paths paired with `user_ref`.** Stored objects are encrypted at rest on the S3 path (`S3_SSE`; the dev/staging local fallback is not); local scratch WAVs are deleted once the stored copy has been transcribed (or transcription has permanently failed) and are never shipped anywhere — treat any local audio file as sensitive.
 - **`user_ref` is an opaque string:** never parsed, enriched, foreign-keyed, or joined across systems. This service is a strict emitter; OreeAI's database is never written to.
 - **The transcription provider must support both batch and realtime on one account** (Deepgram or AssemblyAI). **Never Whisper** — it streams poorly and the phase 3 live-trainer needs realtime.
 - **Production compose never publishes ports to `0.0.0.0`** — loopback or internal network only. Lesson from OreeAI PR #48. (The dev `docker-compose.yml` is exempt; `docker-compose.prod.yml` is not.)

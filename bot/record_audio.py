@@ -1,6 +1,6 @@
 """Capture the virtual speaker monitor into a WAV file via `parec`.
 
-The format is pinned by the shared contracts and must never change:
+The format is pinned (bot/README.md, Audio format) and must never change:
 16-bit PCM, 16 kHz, mono — directly acceptable by Deepgram/AssemblyAI,
 so nothing downstream ever transcodes.
 

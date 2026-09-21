@@ -86,8 +86,9 @@ service's own database and is kept. The audio is uploaded to a private
 S3-compatible bucket (`S3_BUCKET`) — the same code works with AWS S3,
 Cloudflare R2, Hetzner Object Storage, Backblaze B2, or MinIO; switching
 provider is an environment-variable change, not a code change. The bot
-writes the WAV to local scratch space first (`AUDIO_HOST_PATH`); once
-the upload lands, the local file is deleted.
+writes the WAV to local scratch space first (`AUDIO_HOST_PATH`); once the
+stored copy has been transcribed (or its transcription has permanently
+failed), the local file is deleted.
 
 **Where the audio lives (object key layout):**
 
@@ -149,8 +150,9 @@ down) — the worker remains the policy owner because it also clears
 **Nothing about audio in logs.** The service never logs audio bytes,
 recording paths, or object keys in a way that could be correlated with
 a user reference, and never logs webhook secrets. Local scratch WAVs
-live only on the host volume, are deleted right after a successful
-upload, and are never shipped anywhere.
+live only on the host volume, are deleted once the stored copy has been
+transcribed (or transcription has permanently failed), and are never
+shipped anywhere.
 
 ### Bucket-setup checklist
 
@@ -246,30 +248,35 @@ queued -> joining -> recording -> processing -> done
   `bot_error:exit_<n>`, ...) and the exit-code table they map from are in
   [bot/README.md](bot/README.md).
 
-Active statuses count against `CALL_CONCURRENCY_LIMIT`, enforced race-free
-at intake and again when the runner claims the call. The runner also
-sweeps stale calls (`stale_call`) and reaps orphaned bot containers after
-a restart (`worker_restart`).
+Active statuses count against `CALL_CONCURRENCY_LIMIT`: checked at intake
+(advisory) and re-checked under the row lock when the runner claims the
+call. The runner also sweeps stale calls (`stale_call`) and reaps orphaned
+bot containers after a restart (`worker_restart`).
 
 ## Webhooks
 
-Every terminal transition (`done` / `failed`) is POSTed as JSON to the
-call's `webhook_url`, signed with the call's `webhook_secret`:
+On each terminal transition (`done` / `failed`) the service sends a
+signed JSON POST to the call's `webhook_url`:
 
-- `X-OT-Timestamp` — unix seconds; receivers should reject stale
-  timestamps (`WEBHOOK_TIMESTAMP_SKEW`, default 300 s).
+- `X-OT-Timestamp` — unix seconds; a contract value for receivers, which
+  should reject stale timestamps (`WEBHOOK_TIMESTAMP_SKEW`, default
+  300 s — this service does not enforce the skew; it only signs).
 - `X-OT-Signature` — hex HMAC-SHA256 over `{timestamp}:{raw_body}`.
 - Payload fields: `call_id`, `status`, `end_reason`, `failure_reason`,
   `user_ref`, `transcript`, `audio_url`, `created_at`, `finished_at`.
   The `audio_url` is a URI snapshot taken at completion; with immediate
   retention the object may already be deleted (see Data retention).
 
-Delivery is at-least-once: up to 5 attempts (`WEBHOOK_MAX_ATTEMPTS`) with
-1/4/16/64/256 s backoff and a 10 s per-attempt timeout
-(`WEBHOOK_HTTP_TIMEOUT`). A 2xx marks the call delivered, a 4xx is a
-permanent give-up (the receiver answered; retrying cannot help), 5xx and
-network errors retry. `webhook_secret` never appears in the payload, in
-logs, or anywhere outside the HMAC computation.
+Delivery happens synchronously within the terminal transition, with
+bounded retries: up to 5 attempts (`WEBHOOK_MAX_ATTEMPTS`), 1/4/16/64 s
+between them (the 256 s step exists for raised `WEBHOOK_MAX_ATTEMPTS`)
+and a 10 s per-attempt timeout (`WEBHOOK_HTTP_TIMEOUT`). A 2xx marks the
+call delivered; any other status below 500 (3xx/4xx) is a permanent
+give-up — the receiver answered, retrying cannot help; 5xx and network
+errors retry. This is best-effort delivery, not a durable queue: if the
+runner dies between the terminal commit and the dispatch, the call stays
+terminal with no further automatic attempt. `webhook_secret` is stored
+on the call row for signing and never appears in the payload or in logs.
 
 ## Layout
 
