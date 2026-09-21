@@ -251,7 +251,15 @@ Operations:
 ## Tagging and roll-forward
 
 Releases are git tags (`v0.1.0`, `v0.1.1`, …); the first deploy is
-`v0.1.0`. Both image tags come from `.env`:
+`v0.1.0`. Create the tag on the merged commit and push it:
+
+```bash
+git checkout main && git pull
+git tag -a v0.1.0 -m "first production deploy"
+git push origin v0.1.0
+```
+
+Both image tags come from `.env`:
 
 ```bash
 git fetch --tags

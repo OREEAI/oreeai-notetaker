@@ -31,6 +31,33 @@ make docker-logs
 make docker-down
 ```
 
+## Deployment
+
+Production runs on the VPS as one `docker compose` stack: `api`, `db`,
+`redis`, `bot-runner` (plus a build-only `bot` image). The API binds
+`127.0.0.1` only and `db`/`redis` publish nothing; the docker socket is
+mounted on `bot-runner` alone. **This service is standalone: it does not
+deploy alongside or share state with OreeAI** — it may sit on the same
+host (coexistence is a documented, verified step), but it has its own
+network, volume, and database.
+
+End-to-end procedure, from a clean VPS to a green smoke test:
+[deploy/README.md](deploy/README.md). Rolling a bad release back:
+[deploy/rollback.md](deploy/rollback.md).
+
+## Backups
+
+Transcripts are the product, so the database is backed up nightly at
+03:00 host time by [deploy/backup.sh](deploy/backup.sh) (cron line:
+[deploy/backup.cron](deploy/backup.cron); retention `BACKUP_KEEP_DAYS`,
+default 30; the newest dump is never deleted). Dumps land in
+`/var/lib/oreeai/backups/oreeai-<UTC-timestamp>.sql.gz`.
+
+[deploy/restore.sh](deploy/restore.sh) restores a dump into a throwaway
+database by default (`oreeai_restore_test`) — use that to rehearse. The
+deliberate recovery path is `--target-prod --yes`: it stops the services,
+restores the live database, restarts them, and runs the smoke test.
+
 ## Common commands
 
 | Command | Purpose |
@@ -201,5 +228,7 @@ src/oreeai_notetaker/
 ├── db/             # engine, session, base/mixins
 ├── integrations/   # external platform clients (Google Meet; object storage)
 └── workers/        # background job hooks
+deploy/             # production compose procedure, backups, smoke, rollback
+docs/               # design notes (transcription)
 plans/              # local planning docs (gitignored)
 ```
