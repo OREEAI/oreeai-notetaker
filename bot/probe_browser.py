@@ -22,6 +22,7 @@ Exits 0 on success, 1 on any failure.
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import os
@@ -152,6 +153,29 @@ def _browser_argv() -> str | None:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="In-container browser launch probe (defaults to the meet config)."
+    )
+    parser.add_argument(
+        "--platform",
+        default=(
+            os.environ.get("PROBE_PLATFORM", "").strip()
+            or os.environ.get("BOT_PLATFORM", "").strip()
+            or "meet"
+        ),
+        help=(
+            "platform label for the probe run; the launch config is shared, "
+            "so this only labels the output (default: PROBE_PLATFORM, then "
+            "BOT_PLATFORM, then meet)"
+        ),
+    )
+    args = parser.parse_args()
+    platform = args.platform.strip().lower()
+    if platform not in ("meet", "zoom"):
+        logging.basicConfig(level=logging.INFO)
+        logger.error("unknown probe platform %r (expected: meet, zoom)", args.platform)
+        return 1
+
     raw = os.environ.get("LOG_LEVEL", "INFO").upper()
     level = getattr(logging, raw, None)
     if not isinstance(level, int):
@@ -195,6 +219,7 @@ def main() -> int:
     except Exception:
         logger.exception("probe failed: browser did not launch or evaluate")
         return 1
+    logger.info("platform=%s", platform)
     logger.info("channel=%s", BROWSER_CHANNEL)
     logger.info("user_agent=%s", user_agent)
     logger.info("navigator.webdriver=%s", webdriver)

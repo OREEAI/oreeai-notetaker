@@ -133,7 +133,11 @@ class FakeLocator:
 
     def fill(self, value: str) -> None:
         if self._page is not None:
-            self._page.typed.append(value)
+            self._page.filled.append(value)
+
+    def evaluate(self, expression: str) -> None:
+        if self._page is not None:
+            self._page.evaluated.append(expression)
 
 
 class _FakeMouse:
@@ -165,9 +169,9 @@ def _matches_attribute(item: _Element, tag: str, attr: str, value: str) -> bool:
 class FakePage:
     """Parse one committed fixture and answer selector queries from its DOM.
 
-    ``clicked`` / ``pressed`` / ``typed`` record the interactions the bot
-    performs (via :mod:`bot.humanize`) so tests can assert the consent
-    announcement without a browser.
+    ``clicked`` / ``pressed`` / ``typed`` / ``evaluated`` record the
+    interactions the bot performs (via :mod:`bot.humanize` and the DOM-click
+    fallbacks) so tests can assert the flow without a browser.
     """
 
     def __init__(self, html: str, url: str = "https://meet.google.com/abc-defg-hij") -> None:
@@ -180,6 +184,8 @@ class FakePage:
         self.clicked: list[str] = []
         self.pressed: list[str] = []
         self.typed: list[str] = []
+        self.filled: list[str] = []
+        self.evaluated: list[str] = []
 
     @classmethod
     def from_fixture(cls, path: Path) -> FakePage:

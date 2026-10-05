@@ -51,6 +51,9 @@ services:
       # Operator-level consent attestation; the API-level gate (consent_ack on
       # POST /calls) landed in PR 5 — this remains the bot's own last resort.
       CONSENT_ACK: "true"
+      # Platform selection (Z1): meet (default) or zoom; the entrypoint
+      # dispatches to bot.join_meet / bot.join_zoom on the same audio graph.
+      BOT_PLATFORM: ${BOT_PLATFORM:-meet}
       BOT_AUTH_MODE: ${BOT_AUTH_MODE:-anonymous}
       BOT_PROFILE_DIR: ${BOT_PROFILE_DIR:-/profile}
       ENVIRONMENT: ${ENVIRONMENT:-local}

@@ -9,6 +9,7 @@ UV ?= uv
 export BOT_AUTH_MODE BOT_PROFILE_DIR BOT_LOGIN_TIMEOUT PAREC_DEVICE
 export BOT_WAITING_ROOM_TIMEOUT BOT_EMPTY_ROOM_TIMEOUT BOT_ALONE_GRACE
 export BOT_MAX_RECORD_DURATION BOT_SILENCE_RMS_FLOOR
+export BOT_PLATFORM
 export CONSENT_ACK ENVIRONMENT API_KEY
 
 .PHONY: setup dev test lint format typecheck makemigrations migrate downgrade docker-up docker-down docker-logs docker-rebuild bot-build bot-run bot-probe bot-runner clean
@@ -62,13 +63,17 @@ bot-build:
 # The -dirty suffix marks images built from an uncommitted working tree.
 GIT_SHA ?= $(shell sha=$$(git rev-parse --short HEAD 2>/dev/null || echo unknown); test -n "$$(git status --porcelain 2>/dev/null)" && sha=$${sha}-dirty; echo $$sha)
 
+# Platform selection (Z1): BOT_PLATFORM defaults to meet; zoom runs reuse the
+# same target and audio directory:
+#   make bot-run MEETING_URL=https://zoom.us/j/<id>?pwd=... BOT_PLATFORM=zoom \
+#       CONSENT_ACK=true CALL_ID=zoomspike
 bot-run: bot-build
 	mkdir -p bot/audio bot/debug $(BOT_PROFILE) && chmod 777 bot/audio bot/debug && chmod 700 $(BOT_PROFILE)
 	docker run --rm --init --shm-size=1g --name oreeai-bot-spike \
 		$(GPU_FLAGS) \
 		-e MEETING_URL -e BOT_NAME -e CONSENT_ACK -e ENVIRONMENT -e CALL_ID -e LOG_LEVEL -e TZ=$(TZ) -e DEBUG_DIR=/debug \
 		-e BOT_WAITING_ROOM_TIMEOUT -e BOT_EMPTY_ROOM_TIMEOUT -e BOT_ALONE_GRACE -e BOT_MAX_RECORD_DURATION \
-		-e BOT_SILENCE_RMS_FLOOR -e PAREC_DEVICE -e BOT_AUTH_MODE -e BOT_PROFILE_DIR \
+		-e BOT_SILENCE_RMS_FLOOR -e PAREC_DEVICE -e BOT_AUTH_MODE -e BOT_PROFILE_DIR -e BOT_PLATFORM \
 		-v $(CURDIR)/bot/audio:/audio \
 		-v $(CURDIR)/bot/debug:/debug \
 		-v $(BOT_PROFILE):/profile \
@@ -98,7 +103,7 @@ GPU_FLAGS := $(shell test -e /dev/dri && echo "--device /dev/dri --group-add 44 
 TZ ?= Africa/Lagos
 
 bot-probe: bot-build
-	docker run --rm --shm-size=1g $(GPU_FLAGS) -e TZ=$(TZ) --entrypoint bash oreeai-bot:local -c 'Xvfb :99 -screen 0 2400x1350x24 -nolisten tcp & sleep 1; export XDG_RUNTIME_DIR=/tmp/runtime-$$(id -u); mkdir -p $$XDG_RUNTIME_DIR; pulseaudio --start --exit-idle-time=-1 --disable-shm; pactl load-module module-null-sink sink_name=virtual_speaker >/dev/null; pactl load-module module-remap-source master=virtual_speaker.monitor source_name=virtual_mic >/dev/null; DISPLAY=:99 python -m bot.probe_browser'
+	docker run --rm --shm-size=1g $(GPU_FLAGS) -e TZ=$(TZ) -e BOT_PLATFORM --entrypoint bash oreeai-bot:local -c 'Xvfb :99 -screen 0 2400x1350x24 -nolisten tcp & sleep 1; export XDG_RUNTIME_DIR=/tmp/runtime-$$(id -u); mkdir -p $$XDG_RUNTIME_DIR; pulseaudio --start --exit-idle-time=-1 --disable-shm; pactl load-module module-null-sink sink_name=virtual_speaker >/dev/null; pactl load-module module-remap-source master=virtual_speaker.monitor source_name=virtual_mic >/dev/null; DISPLAY=:99 python -m bot.probe_browser --platform "$${BOT_PLATFORM:-meet}"'
 
 # DB-driven bot runner (PR 5): polls Call rows, claims with
 # FOR UPDATE SKIP LOCKED, spawns bot containers with the bot/docker-compose.yml
