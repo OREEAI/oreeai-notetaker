@@ -55,7 +55,11 @@ _DEFAULT_SELECTOR_SET: SelectorSet = selectors_zoom
 
 _POLL_TIMEOUT_MS = 0
 _DETAIL_CHARS = 120
+# Live in-call shapes (2026-10-05): aria "open the participants list pane,[2]
+# particpants" (Zoom's spelling) and visible text "2\nParticipants".
+_PARTICIPANT_BRACKET_RE = re.compile(r"\[(\d{1,3})\]")
 _PARTICIPANT_COUNT_RE = re.compile(r"participants?\s*\(?(\d+)\)?", re.IGNORECASE)
+_PARTICIPANT_LEADING_RE = re.compile(r"^\s*(\d{1,3})\s+participants?\b", re.IGNORECASE)
 # Zoom's toolbar chip may render the bare count next to the control label; a
 # standalone number in the accessible name is accepted like Meet's chip.
 _BARE_COUNT_RE = re.compile(r"^\s*\(?\s*(\d{1,3})\s*\)?\s*$")
@@ -176,8 +180,15 @@ def participant_count(
 
     label = button.get_attribute("aria-label") or ""
     text = _safe_inner_text(button)
-    match = _PARTICIPANT_COUNT_RE.search(label) or _PARTICIPANT_COUNT_RE.search(text)
-    count_text = match.group(1) if match is not None else None
+    count_text = None
+    for source in (label, text):
+        for pattern in (_PARTICIPANT_BRACKET_RE, _PARTICIPANT_COUNT_RE, _PARTICIPANT_LEADING_RE):
+            match = pattern.search(source)
+            if match is not None:
+                count_text = match.group(1)
+                break
+        if count_text is not None:
+            break
     if count_text is None:
         bare = _BARE_COUNT_RE.match(label) or _BARE_COUNT_RE.match(text)
         count_text = bare.group(1) if bare is not None else None

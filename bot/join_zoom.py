@@ -91,7 +91,8 @@ logger = logging.getLogger("oreeai.bot.zoom")
 # Budgets for the Zoom pre-join flow. The landing page can take a moment to
 # render after navigation; the web-client form follows the click-through.
 BROWSER_JOIN_TIMEOUT_MS = 15000
-PREJOIN_READY_TIMEOUT_MS = 15000
+PREJOIN_READY_TIMEOUT_S = 20.0
+PREJOIN_READY_TIMEOUT_MS = int(PREJOIN_READY_TIMEOUT_S * 1000)
 JOIN_BUTTON_TIMEOUT_MS = int(JOIN_BUTTON_TIMEOUT_S * 1000)
 AUDIO_DIALOG_TIMEOUT_MS = 8000
 POLL_INTERVAL_S = 2.0
@@ -102,11 +103,12 @@ _IN_CALL = "in_call"
 _STOPPED = "stopped"
 _BOT_ERROR = "bot_error"
 
-# Zoom's media toggles name the action they will perform, not the current
-# state: a muted mic's control reads "Unmute my microphone". These markers
-# therefore mean "already off" (Meet's "Turn off ..." convention inverted).
-_MIC_ALREADY_OFF = ("unmute my microphone", "turn on microphone")
-_CAMERA_ALREADY_OFF = ("start my video", "turn on camera")
+# Zoom's media controls are labelled with the action they will perform
+# ("Mute" when live, "Unmute" when muted; "Stop Video" / "Start Video"). The
+# pre-join mic label is static in the live build (state lives in the icon),
+# so these markers only catch explicit already-off labels.
+_MIC_ALREADY_OFF = ("unmute",)
+_CAMERA_ALREADY_OFF = ("start video", "turn on camera", "start my video")
 
 
 def _now() -> float:
@@ -148,8 +150,15 @@ def _mute_media(
     if any(marker in aria for marker in already_off_markers):
         logger.info("%s already off", label)
         return True
-    move_to(page, locator)
-    click_like_human(locator)
+    try:
+        move_to(page, locator)
+        click_like_human(locator)
+    except Exception:
+        if required:
+            logger.error("%s toggle click failed; refusing to join unmuted (echo risk)", label)
+            return False
+        logger.warning("%s toggle click failed; continuing without muting", label)
+        return True
     logger.info("%s muted before joining", label)
     return True
 
@@ -193,10 +202,26 @@ def _open_web_client(page: Page) -> BotOutcome | None:
 
     Returns an error outcome when no browser join path exists; None when the
     web-client page is (or already was) the current page.
+
+    Live evidence (2026-10-05): the landing control is a button labelled
+    "Join from browser"; Playwright's trusted click fires the button's
+    handler but does not always navigate (the same control's DOM click does),
+    so a verified fallback dispatches ``el.click()`` when no progress is
+    visible. This never bypasses a wall — walls are detected separately.
     """
     if "/wc/" in page.url:
         logger.info("direct web-client URL; skipping the landing page")
         return None
+
+    accept = selectors_zoom.cookie_accept_button(page, timeout_ms=1500)
+    if accept is not None:
+        try:
+            move_to(page, accept)
+            click_like_human(accept)
+            logger.info("cookie banner accepted")
+        except Exception:
+            logger.warning("cookie banner click failed; continuing")
+
     link = selectors_zoom.browser_join_link(page, timeout_ms=BROWSER_JOIN_TIMEOUT_MS)
     if link is None:
         wall = _detect_fatal_wall(page)
@@ -212,7 +237,49 @@ def _open_web_client(page: Page) -> BotOutcome | None:
     move_to(page, link)
     click_like_human(link)
     logger.info("join from your browser clicked")
+    page.wait_for_timeout(4000)
+    if not _web_client_started(page):
+        logger.warning(
+            "join click did not start the web client; dispatching a DOM click on the same control"
+        )
+        try:
+            link.evaluate("el => el.click()")
+        except Exception:
+            logger.warning("DOM click raced with navigation; continuing")
     return None
+
+
+def _web_client_started(page: Page) -> bool:
+    if "/wc/" in page.url:
+        return True
+    return selectors_zoom.client_frame_present(page, timeout_ms=0)
+
+
+def _wait_for_prejoin(page: Page, timeout_s: float = PREJOIN_READY_TIMEOUT_S) -> bool:
+    """Wait until the client frame's pre-join controls have rendered."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        if selectors_zoom.name_input(page, timeout_ms=0) is not None:
+            return True
+        if selectors_zoom.join_button(page, timeout_ms=0) is not None:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        page.wait_for_timeout(1000)
+
+
+def _set_display_name(page: Page, name_field: Locator, bot_name: str) -> None:
+    """Type the consent name, then commit it through the form model.
+
+    Live evidence (2026-10-05): Zoom's Vue form ignores Playwright keyboard
+    events — the Join button stays disabled after ``type_text`` — while
+    ``fill()`` lands the same value through the model path and enables the
+    button. The humanized typing still runs so the visible behavior matches
+    Meet's green room; the fill is the commit, not a second edit.
+    """
+    type_text(page, name_field, bot_name)
+    name_field.fill(bot_name)
+    logger.info("display name set: %s", bot_name)
 
 
 def _run_prejoin(page: Page, bot_name: str) -> BotOutcome | None:
@@ -220,8 +287,7 @@ def _run_prejoin(page: Page, bot_name: str) -> BotOutcome | None:
     dwell_before_start(page)
     name_field = selectors_zoom.name_input(page, timeout_ms=PREJOIN_READY_TIMEOUT_MS)
     if name_field is not None:
-        type_text(page, name_field, bot_name)
-        logger.info("display name set: %s", bot_name)
+        _set_display_name(page, name_field, bot_name)
     else:
         debug_screenshot(page, "zoom name field not found")
         logger.warning("name field not found; joining with Zoom's default display name")
@@ -247,20 +313,45 @@ def _run_prejoin(page: Page, bot_name: str) -> BotOutcome | None:
 
 
 def _click_join(page: Page) -> BotOutcome | None:
-    """Click the pre-join Join control; the web client joins direct."""
+    """Click the pre-join Join control; the web client joins direct.
+
+    Live evidence (2026-10-05): the Join button shares the landing control's
+    trusted-click behavior — the UI can ignore a Playwright click — so a DOM
+    click on the same control is dispatched when no transition is visible.
+    """
     join = selectors_zoom.join_button(page, timeout_ms=JOIN_BUTTON_TIMEOUT_MS)
     if join is None:
         debug_screenshot(page, "zoom join button never appeared")
         logger.error("could not find a way to join the meeting")
         return BotOutcome(EXIT_BOT_ERROR, None, "join control never appeared")
-    pause_between_actions(page)
-    move_to(page, join)
-    click_like_human(join)
+    try:
+        pause_between_actions(page)
+        move_to(page, join)
+        click_like_human(join)
+    except Exception:
+        debug_screenshot(page, "join control click failed")
+        logger.error("join control click failed (disabled or covered)")
+        return BotOutcome(EXIT_BOT_ERROR, None, "join control click failed")
+    page.wait_for_timeout(4000)
+    if _still_prejoin(page):
+        logger.warning("join click did not transition; dispatching a DOM click on the same control")
+        try:
+            join.evaluate("el => el.click()")
+        except Exception:
+            logger.warning("DOM click raced with the join transition; continuing")
+        page.wait_for_timeout(4000)
     # Zoom's web client submits the join directly (the waiting room, if any,
     # is detected after the click); Meet's knocking/direct distinction has no
     # pre-click Zoom equivalent.
     logger.info("join clicked (direct)")
     return None
+
+
+def _still_prejoin(page: Page) -> bool:
+    """Whether the pre-join form is still the only visible state."""
+    if selectors_zoom.leave_button(page, timeout_ms=0) is not None:
+        return False
+    return selectors_zoom.join_button(page, timeout_ms=0) is not None
 
 
 def _join_computer_audio(page: Page) -> None:
@@ -295,9 +386,12 @@ def _leave_zoom(page: Page) -> None:
     if button is None:
         logger.warning("leave control absent; browser shutdown will end the Zoom session")
         return
-    move_to(page, button)
-    click_like_human(button)
-    logger.info("leave clicked")
+    try:
+        move_to(page, button)
+        click_like_human(button)
+        logger.info("leave clicked")
+    except Exception:
+        logger.warning("leave control click failed; browser shutdown will end the Zoom session")
 
 
 def _finish_recording(
@@ -496,6 +590,12 @@ def _join_and_record_zoom(
     wall = _detect_fatal_wall(page)
     if wall is not None:
         return wall, recorder
+
+    if not _wait_for_prejoin(page):
+        debug_screenshot(page, "web-client pre-join never rendered")
+        reason = "web-client pre-join never rendered"
+        logger.error("%s", reason)
+        return BotOutcome(EXIT_BOT_ERROR, None, reason), recorder
 
     outcome = _run_prejoin(page, bot_name)
     if outcome is not None:

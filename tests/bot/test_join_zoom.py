@@ -107,8 +107,9 @@ def test_prejoin_types_fixed_name_and_mutes_mic_and_camera() -> None:
 
     assert outcome is None
     assert page.typed_text() == "Oree Notetaker"
-    assert "Mute my microphone" in page.clicked
-    assert "Stop my video" in page.clicked
+    assert page.filled == ["Oree Notetaker"]
+    assert "Mute" in page.clicked
+    assert "Stop Video" in page.clicked
 
 
 def test_prejoin_already_muted_skips_muting_clicks() -> None:
@@ -117,8 +118,8 @@ def test_prejoin_already_muted_skips_muting_clicks() -> None:
     outcome = join_zoom._run_prejoin(page, "Oree Notetaker")
 
     assert outcome is None
-    assert "Unmute my microphone" not in page.clicked
-    assert "Start my video" not in page.clicked
+    assert "Unmute" not in page.clicked
+    assert "Start Video" not in page.clicked
 
 
 def test_prejoin_missing_mic_toggle_is_fatal() -> None:
@@ -141,6 +142,9 @@ def test_join_clicked_logs_direct(caplog: pytest.LogCaptureFixture) -> None:
 
     assert outcome is None
     assert "Join" in page.clicked
+    # The pre-join form never transitions in fixtures, so the verified-click
+    # fallback dispatches the DOM click (live behavior on the 2026-10 build).
+    assert page.evaluated == ["el => el.click()"]
     assert any("join clicked (direct)" in record.getMessage() for record in caplog.records)
 
 
@@ -166,7 +170,11 @@ def test_landing_browser_join_click() -> None:
     outcome = join_zoom._open_web_client(page)
 
     assert outcome is None
-    assert "Join from your browser" in page.clicked
+    assert "Join from browser" in page.clicked
+    # Live evidence: the trusted click does not navigate this build, so the
+    # DOM-click fallback on the same control must fire (fixtures never
+    # navigate, which is exactly the no-progress state).
+    assert page.evaluated == ["el => el.click()"]
 
 
 def test_landing_without_browser_path_is_fatal() -> None:

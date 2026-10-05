@@ -5,17 +5,17 @@ A Zoom web-client UI change must be a one-file fix — edit this file, nothing
 else. Never target CSS classnames; the web client is a Vue app whose scoped
 classnames change with every build.
 
+The current web client renders its pre-join and in-call UI inside a
+same-origin iframe (``id="webclient"``) on ``app.zoom.us``. Every selector
+function therefore resolves that frame first and falls back to the page
+itself (the landing page, and older builds that render inline). Patterns
+below are pinned to the Z1 live join session (2026-10-05) and to the
+snapshots in ``tests/bot/fixtures/zoom/``.
+
 Every function takes a Playwright ``Page`` and returns the first matching
 visible element, or ``None`` when nothing matched within the timeout.
 Callers decide what "not found" means (usually: save a debug screenshot,
 log a warning, keep going).
-
-The patterns below cover the guest web-client flow: the ``/j/<id>`` landing
-page ("Join from your browser" click-through), the web-client pre-join page
-(name + media toggles + Join), the post-join audio dialog, the in-call
-toolbar, and the wall notices the spike fails fast on. They are pinned to
-the DOM snapshots in ``tests/bot/fixtures/zoom/``; when the live Z1 join
-session corrects a pattern, update the fixture and this file together.
 """
 
 from __future__ import annotations
@@ -25,35 +25,46 @@ import time
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from playwright.sync_api import Locator, Page
+    from playwright.sync_api import FrameLocator, Locator, Page
 
 Role = Literal["button", "textbox", "link"]
 RoleQuery = tuple[Role, re.Pattern[str]]
 
-# Landing page (/j/<id>): the human path into the web client. The control has
-# appeared as both a link and (on some variants) a button; both are queried.
+# The web client iframe (live 2026-10-05 evidence: id="webclient",
+# class="pwa-webclient__iframe"); the src fallback covers variants.
+_CLIENT_FRAME_SELECTORS: tuple[str, ...] = ("iframe#webclient", 'iframe[src*="/wc/"]')
+
+# Landing page ("/j/<id>"): the human path into the web client. The current
+# build presents a *button* labelled "Join from browser" next to "Join from
+# Zoom Workplace app"; older builds used a plain link "Join from your
+# browser". Both roles are queried for both wordings.
 _BROWSER_JOIN: tuple[RoleQuery, ...] = (
-    ("link", re.compile(r"join from your browser.*", re.IGNORECASE)),
-    ("link", re.compile(r"join from browser.*", re.IGNORECASE)),
-    ("button", re.compile(r"join from your browser.*", re.IGNORECASE)),
+    ("button", re.compile(r"join from (your )?browser.*", re.IGNORECASE)),
+    ("link", re.compile(r"join from (your )?browser.*", re.IGNORECASE)),
 )
-# Web-client pre-join "Join" control. Anchored so it cannot catch link/button
-# labels such as "Join from your browser" or "Join with computer audio".
+# Web-client pre-join "Join" control: a plain button whose text is "Join".
 _JOIN: tuple[RoleQuery, ...] = (
     ("button", re.compile(r"^\s*join\s*$", re.IGNORECASE)),
     ("button", re.compile(r"^\s*join meeting\s*$", re.IGNORECASE)),
 )
+# The live pre-join name input carries no accessible name (a class-only
+# label), so callers fall back to the first visible textbox in the client
+# frame. The named query stays first for builds that do expose it.
 _NAME_INPUT: tuple[RoleQuery, ...] = (("textbox", re.compile(r"your name.*", re.IGNORECASE)),)
+# Pre-join mic/camera labels are the *action* ("Mute", "Stop Video");  the
+# live in-call toolbar uses lowercase action labels ("mute my microphone").
 _MICROPHONE: tuple[RoleQuery, ...] = (
     ("button", re.compile(r"(mute|unmute) my microphone.*", re.IGNORECASE)),
+    ("button", re.compile(r"^\s*(mute|unmute)\s*$", re.IGNORECASE)),
     ("button", re.compile(r"(turn on|turn off) microphone.*", re.IGNORECASE)),
 )
 _CAMERA: tuple[RoleQuery, ...] = (
-    ("button", re.compile(r"(start|stop) my video.*", re.IGNORECASE)),
+    ("button", re.compile(r"(start|stop) (my )?video.*", re.IGNORECASE)),
+    ("button", re.compile(r"^\s*video\s*$", re.IGNORECASE)),
     ("button", re.compile(r"(turn on|turn off) camera.*", re.IGNORECASE)),
 )
-# Post-join audio dialog. The exact button has shipped as "Join with Computer
-# Audio" and "Join Audio by Computer"; the generic fallbacks cover variants.
+# Post-join audio dialog (not shown when the account auto-joins computer
+# audio; kept for configurations that do show it).
 _AUDIO_JOIN: tuple[RoleQuery, ...] = (
     ("button", re.compile(r"join (audio )?(by|with) computer( audio)?.*", re.IGNORECASE)),
     ("button", re.compile(r"join audio.*", re.IGNORECASE)),
@@ -62,9 +73,15 @@ _AUDIO_JOIN: tuple[RoleQuery, ...] = (
 _LEAVE: tuple[RoleQuery, ...] = (
     ("button", re.compile(r"^\s*leave( meeting)?\s*$", re.IGNORECASE)),
 )
+# Live in-call control: aria "open the participants list pane,[2] particpants"
+# (Zoom's typo) with visible text "2\nParticipants".
 _PARTICIPANTS: tuple[RoleQuery, ...] = (
+    ("button", re.compile(r"open the participants.*", re.IGNORECASE)),
     ("button", re.compile(r"participants.*", re.IGNORECASE)),
     ("button", re.compile(r"show participants.*", re.IGNORECASE)),
+)
+_COOKIE_ACCEPT: tuple[RoleQuery, ...] = (
+    ("button", re.compile(r"^\s*accept cookies\s*$", re.IGNORECASE)),
 )
 # Waiting-room vs. meeting-not-started are deliberately disjoint patterns:
 # the queue contract requires two separate predicates, never one heuristic.
@@ -124,12 +141,25 @@ _DESKTOP_APP_REQUIRED: re.Pattern[str] = re.compile(
 )
 
 
-def _role_locators(page: Page, queries: tuple[RoleQuery, ...]) -> list[Locator]:
-    return [page.get_by_role(role, name=name) for role, name in queries]
+def _root(page: Page) -> Page | FrameLocator:
+    """The frame root carrying the web-client UI (the page on landing)."""
+    for selector in _CLIENT_FRAME_SELECTORS:
+        try:
+            if page.locator(selector).count() > 0:
+                return page.frame_locator(selector).first
+        except Exception:
+            continue
+    return page
 
 
-def _text_locators(page: Page, patterns: tuple[re.Pattern[str], ...]) -> list[Locator]:
-    return [page.get_by_text(pattern) for pattern in patterns]
+def _role_locators(root: Page | FrameLocator, queries: tuple[RoleQuery, ...]) -> list[Locator]:
+    return [root.get_by_role(role, name=name) for role, name in queries]
+
+
+def _text_locators(
+    root: Page | FrameLocator, patterns: tuple[re.Pattern[str], ...]
+) -> list[Locator]:
+    return [root.get_by_text(pattern) for pattern in patterns]
 
 
 def _first_visible(page: Page, locators: list[Locator], timeout_ms: int = 1000) -> Locator | None:
@@ -143,6 +173,21 @@ def _first_visible(page: Page, locators: list[Locator], timeout_ms: int = 1000) 
         page.wait_for_timeout(250)
 
 
+def client_frame_present(page: Page, timeout_ms: int = 0) -> bool:
+    """Whether the web-client iframe exists (used to confirm navigation)."""
+    deadline = time.monotonic() + timeout_ms / 1000
+    while True:
+        for selector in _CLIENT_FRAME_SELECTORS:
+            try:
+                if page.locator(selector).count() > 0:
+                    return True
+            except Exception:
+                continue
+        if time.monotonic() >= deadline:
+            return False
+        page.wait_for_timeout(250)
+
+
 def browser_join_link(page: Page, timeout_ms: int = 1000) -> Locator | None:
     """The "/j" landing page's click-through into the web client."""
     return _first_visible(page, _role_locators(page, _BROWSER_JOIN), timeout_ms)
@@ -150,74 +195,81 @@ def browser_join_link(page: Page, timeout_ms: int = 1000) -> Locator | None:
 
 def join_button(page: Page, timeout_ms: int = 1000) -> Locator | None:
     """The web-client pre-join page's Join control."""
-    return _first_visible(page, _role_locators(page, _JOIN), timeout_ms)
+    return _first_visible(page, _role_locators(_root(page), _JOIN), timeout_ms)
 
 
 def name_input(page: Page, timeout_ms: int = 1000) -> Locator | None:
-    locators = _role_locators(page, _NAME_INPUT)
-    locators.append(page.locator('input[aria-label*="name" i]'))
-    locators.append(page.locator('input[placeholder*="name" i]'))
+    root = _root(page)
+    locators = _role_locators(root, _NAME_INPUT)
+    # Live evidence (2026-10-05): the pre-join input has no accessible name;
+    # it is the only visible textbox in the client frame.
+    locators.append(root.get_by_role("textbox"))
     return _first_visible(page, locators, timeout_ms)
 
 
 def microphone_toggle(page: Page, timeout_ms: int = 1000) -> Locator | None:
-    return _first_visible(page, _role_locators(page, _MICROPHONE), timeout_ms)
+    return _first_visible(page, _role_locators(_root(page), _MICROPHONE), timeout_ms)
 
 
 def camera_toggle(page: Page, timeout_ms: int = 1000) -> Locator | None:
-    return _first_visible(page, _role_locators(page, _CAMERA), timeout_ms)
+    return _first_visible(page, _role_locators(_root(page), _CAMERA), timeout_ms)
 
 
 def audio_join_button(page: Page, timeout_ms: int = 1000) -> Locator | None:
-    return _first_visible(page, _role_locators(page, _AUDIO_JOIN), timeout_ms)
+    return _first_visible(page, _role_locators(_root(page), _AUDIO_JOIN), timeout_ms)
 
 
 def leave_button(page: Page, timeout_ms: int = 1000) -> Locator | None:
-    return _first_visible(page, _role_locators(page, _LEAVE), timeout_ms)
+    return _first_visible(page, _role_locators(_root(page), _LEAVE), timeout_ms)
 
 
 def waiting_room_indicator(page: Page, timeout_ms: int = 1000) -> Locator | None:
-    return _first_visible(page, _text_locators(page, (_WAITING_ROOM,)), timeout_ms)
+    return _first_visible(page, _text_locators(_root(page), (_WAITING_ROOM,)), timeout_ms)
 
 
 def meeting_not_started_indicator(page: Page, timeout_ms: int = 1000) -> Locator | None:
-    return _first_visible(page, _text_locators(page, (_MEETING_NOT_STARTED,)), timeout_ms)
+    return _first_visible(page, _text_locators(_root(page), (_MEETING_NOT_STARTED,)), timeout_ms)
 
 
 def removed_indicator(page: Page, timeout_ms: int = 1000) -> Locator | None:
-    return _first_visible(page, _text_locators(page, (_REMOVED,)), timeout_ms)
+    return _first_visible(page, _text_locators(_root(page), (_REMOVED,)), timeout_ms)
 
 
 def call_ended_indicator(page: Page, timeout_ms: int = 1000) -> Locator | None:
-    return _first_visible(page, _text_locators(page, (_CALL_ENDED,)), timeout_ms)
+    return _first_visible(page, _text_locators(_root(page), (_CALL_ENDED,)), timeout_ms)
 
 
 def participant_count_button(page: Page, timeout_ms: int = 1000) -> Locator | None:
-    return _first_visible(page, _role_locators(page, _PARTICIPANTS), timeout_ms)
+    return _first_visible(page, _role_locators(_root(page), _PARTICIPANTS), timeout_ms)
 
 
 def alone_hint(page: Page, timeout_ms: int = 1000) -> Locator | None:
-    return _first_visible(page, _text_locators(page, (_ALONE_HINT,)), timeout_ms)
+    return _first_visible(page, _text_locators(_root(page), (_ALONE_HINT,)), timeout_ms)
+
+
+def cookie_accept_button(page: Page, timeout_ms: int = 1000) -> Locator | None:
+    return _first_visible(page, _role_locators(page, _COOKIE_ACCEPT), timeout_ms)
 
 
 def passcode_input(page: Page, timeout_ms: int = 1000) -> Locator | None:
-    locators = _role_locators(page, _PASSCODE_INPUT)
-    locators.append(page.locator('input[aria-label*="passcode" i]'))
-    locators.append(page.locator('input[placeholder*="passcode" i]'))
+    root = _root(page)
+    locators = _role_locators(root, _PASSCODE_INPUT)
+    locators.append(root.locator('input[aria-label*="passcode" i]'))
+    locators.append(root.locator('input[placeholder*="passcode" i]'))
     return _first_visible(page, locators, timeout_ms)
 
 
 def passcode_required_indicator(page: Page, timeout_ms: int = 1000) -> Locator | None:
-    return _first_visible(page, _text_locators(page, (_PASSCODE_REQUIRED,)), timeout_ms)
+    return _first_visible(page, _text_locators(_root(page), (_PASSCODE_REQUIRED,)), timeout_ms)
 
 
 def sign_in_required_indicator(page: Page, timeout_ms: int = 1000) -> Locator | None:
-    return _first_visible(page, _text_locators(page, (_SIGN_IN_REQUIRED,)), timeout_ms)
+    return _first_visible(page, _text_locators(_root(page), (_SIGN_IN_REQUIRED,)), timeout_ms)
 
 
 def only_authenticated_indicator(page: Page, timeout_ms: int = 1000) -> Locator | None:
-    return _first_visible(page, _text_locators(page, (_ONLY_AUTHENTICATED,)), timeout_ms)
+    return _first_visible(page, _text_locators(_root(page), (_ONLY_AUTHENTICATED,)), timeout_ms)
 
 
 def desktop_app_required_indicator(page: Page, timeout_ms: int = 1000) -> Locator | None:
-    return _first_visible(page, _text_locators(page, (_DESKTOP_APP_REQUIRED,)), timeout_ms)
+    return _first_visible(page, _text_locators(_root(page), (_DESKTOP_APP_REQUIRED,)), timeout_ms)
