@@ -1,11 +1,10 @@
-"""Pure Zoom web-client call-state predicates (Z1 spike).
+"""Pure Zoom web-client call-state predicates.
 
 Each predicate takes a Playwright page and a selector set, defaulting to the
 shared selectors in :mod:`bot.selectors_zoom`. The predicates perform
 single-shot DOM checks; they never wait, click, navigate, start recording,
 or log. Stateful timing, transitions, and side effects belong in
-:mod:`bot.join_zoom` (Z1 spike loop, superseded in Z2 by
-``bot/listeners_zoom.py``).
+:mod:`bot.listeners_zoom`.
 
 Waiting-room and meeting-not-started are separate predicates by contract:
 Zoom distinguishes "waiting to be let in" from "the host has not started
@@ -38,6 +37,7 @@ class SelectorSet(Protocol):
     camera_toggle: SelectorQuery
     audio_join_button: SelectorQuery
     leave_button: SelectorQuery
+    end_button: SelectorQuery
     waiting_room_indicator: SelectorQuery
     meeting_not_started_indicator: SelectorQuery
     removed_indicator: SelectorQuery
@@ -85,15 +85,34 @@ def _locator_detail(locator: Locator) -> str:
     return _clip(label or _safe_inner_text(locator) or "matching control")
 
 
+def in_call_controls(
+    page: Page, selector_set: SelectorSet = _DEFAULT_SELECTOR_SET
+) -> tuple[bool, str]:
+    """Whether Zoom's in-call toolbar is visible.
+
+    The toolbar shows "Leave" for regular participants; when the bot has
+    been promoted to host (live 2026-10-06: the original host left), the
+    control becomes "End". Both are in-call evidence.
+    """
+    leave = selector_set.leave_button(page, timeout_ms=_POLL_TIMEOUT_MS)
+    if leave is not None:
+        return True, f"in call: {_locator_detail(leave)}"
+    end = selector_set.end_button(page, timeout_ms=_POLL_TIMEOUT_MS)
+    if end is not None:
+        return True, f"in call: {_locator_detail(end)}"
+    return False, "leave/end control absent"
+
+
 def is_prejoin(page: Page, selector_set: SelectorSet = _DEFAULT_SELECTOR_SET) -> tuple[bool, str]:
     """Whether the web client is on its pre-join page.
 
-    A visible leave control means the bot is already in the call; a visible
+    A visible in-call toolbar means the bot is already in the call; a visible
     waiting/not-started notice means the join was already submitted. Only
     the name field / Join control mark the actual pre-join form.
     """
-    if selector_set.leave_button(page, timeout_ms=_POLL_TIMEOUT_MS) is not None:
-        return False, "leave control visible; already in call"
+    controls, controls_detail = in_call_controls(page, selector_set)
+    if controls:
+        return False, f"in-call controls visible ({controls_detail})"
     if selector_set.waiting_room_indicator(page, timeout_ms=_POLL_TIMEOUT_MS) is not None:
         return False, "waiting-room notice visible"
     if selector_set.meeting_not_started_indicator(page, timeout_ms=_POLL_TIMEOUT_MS) is not None:
@@ -131,17 +150,18 @@ def is_meeting_not_started(
 def is_admitted(page: Page, selector_set: SelectorSet = _DEFAULT_SELECTOR_SET) -> tuple[bool, str]:
     """Whether the bot has entered the call.
 
-    The waiting-room and meeting-not-started notices override the leave
-    control: Zoom's waiting pages can render their own leave control, which
+    The waiting-room and meeting-not-started notices override the in-call
+    controls: Zoom's waiting pages can render their own leave control, which
     must never read as admission (same rule as Meet's knock page).
     """
     if selector_set.waiting_room_indicator(page, timeout_ms=_POLL_TIMEOUT_MS) is not None:
-        return False, "waiting-room notice overrides the leave control"
+        return False, "waiting-room notice overrides the in-call controls"
     if selector_set.meeting_not_started_indicator(page, timeout_ms=_POLL_TIMEOUT_MS) is not None:
-        return False, "meeting-not-started notice overrides the leave control"
-    if selector_set.leave_button(page, timeout_ms=_POLL_TIMEOUT_MS) is not None:
-        return True, "in call: leave control visible"
-    return False, "leave control absent"
+        return False, "meeting-not-started notice overrides the in-call controls"
+    controls, controls_detail = in_call_controls(page, selector_set)
+    if controls:
+        return True, controls_detail
+    return False, "leave/end control absent"
 
 
 def is_removed(page: Page, selector_set: SelectorSet = _DEFAULT_SELECTOR_SET) -> tuple[bool, str]:
@@ -171,7 +191,8 @@ def participant_count(
     Callers must distinguish unknown from empty: an unknown count is not
     evidence that the room is empty.
     """
-    if selector_set.leave_button(page, timeout_ms=_POLL_TIMEOUT_MS) is None:
+    controls, _ = in_call_controls(page, selector_set)
+    if not controls:
         return None, "not in a call"
 
     button = selector_set.participant_count_button(page, timeout_ms=_POLL_TIMEOUT_MS)
@@ -204,7 +225,8 @@ def bot_alone_in_call(
     page: Page, selector_set: SelectorSet = _DEFAULT_SELECTOR_SET
 ) -> tuple[bool, str]:
     """Whether the available signals show only the bot left in the call."""
-    if selector_set.leave_button(page, timeout_ms=_POLL_TIMEOUT_MS) is None:
+    controls, _ = in_call_controls(page, selector_set)
+    if not controls:
         return False, "not in a call"
 
     count, count_detail = participant_count(page, selector_set)

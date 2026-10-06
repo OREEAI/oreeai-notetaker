@@ -142,6 +142,28 @@ def test_bot_alone_signals() -> None:
     assert unknown is False
 
 
+def test_host_transferred_in_call_states() -> None:
+    """Live 2026-10-06: when the host left, Zoom promoted the bot to host —
+    the toolbar swapped Leave for End and the state was still in-call,
+    alone, count=1. The predicates must read the host variant as in-call.
+    """
+    host = page("zoom_in_call_host_alone.html")
+    admitted, admitted_detail = states_zoom.is_admitted(host)
+    prejoin, _ = states_zoom.is_prejoin(host)
+    count, count_detail = states_zoom.participant_count(host)
+    alone, alone_detail = states_zoom.bot_alone_in_call(host)
+
+    assert admitted is True
+    assert admitted_detail
+    assert prejoin is False
+    assert count == 1
+    assert count_detail
+    assert alone is True
+    assert alone_detail
+    assert selectors_zoom.end_button(host, timeout_ms=0) is not None
+    assert selectors_zoom.leave_button(host, timeout_ms=0) is None
+
+
 @pytest.mark.parametrize(
     ("fixture", "predicate"),
     [

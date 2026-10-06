@@ -1,4 +1,4 @@
-"""Single home for every Zoom web-client DOM selector (Z1 spike).
+"""Single home for every Zoom web-client DOM selector.
 
 Policy: aria-label / role / visible-text based only, ``en-US`` locale forced.
 A Zoom web-client UI change must be a one-file fix — edit this file, nothing
@@ -9,8 +9,9 @@ The current web client renders its pre-join and in-call UI inside a
 same-origin iframe (``id="webclient"``) on ``app.zoom.us``. Every selector
 function therefore resolves that frame first and falls back to the page
 itself (the landing page, and older builds that render inline). Patterns
-below are pinned to the Z1 live join session (2026-10-05) and to the
-snapshots in ``tests/bot/fixtures/zoom/``.
+below are pinned to the Z1 live join session (2026-10-05) and to the Z2
+live lifecycle session (2026-10-06: host promotion swaps Leave for End),
+plus the snapshots in ``tests/bot/fixtures/zoom/``.
 
 Every function takes a Playwright ``Page`` and returns the first matching
 visible element, or ``None`` when nothing matched within the timeout.
@@ -73,10 +74,14 @@ _AUDIO_JOIN: tuple[RoleQuery, ...] = (
 _LEAVE: tuple[RoleQuery, ...] = (
     ("button", re.compile(r"^\s*leave( meeting)?\s*$", re.IGNORECASE)),
 )
+# Host-mode departure control (live 2026-10-06): when the original host left,
+# Zoom promoted the bot to host and the toolbar swapped "Leave" for "End".
+_END: tuple[RoleQuery, ...] = (("button", re.compile(r"^\s*end( meeting)?\s*$", re.IGNORECASE)),)
 # Live in-call control: aria "open the participants list pane,[2] particpants"
-# (Zoom's typo) with visible text "2\nParticipants".
+# (Zoom's typo) with visible text "2\nParticipants". Host mode says "open the
+# manage participants list pane,...".
 _PARTICIPANTS: tuple[RoleQuery, ...] = (
-    ("button", re.compile(r"open the participants.*", re.IGNORECASE)),
+    ("button", re.compile(r"open the (manage )?participants.*", re.IGNORECASE)),
     ("button", re.compile(r"participants.*", re.IGNORECASE)),
     ("button", re.compile(r"show participants.*", re.IGNORECASE)),
 )
@@ -221,6 +226,11 @@ def audio_join_button(page: Page, timeout_ms: int = 1000) -> Locator | None:
 
 def leave_button(page: Page, timeout_ms: int = 1000) -> Locator | None:
     return _first_visible(page, _role_locators(_root(page), _LEAVE), timeout_ms)
+
+
+def end_button(page: Page, timeout_ms: int = 1000) -> Locator | None:
+    """The host-mode End control (present when the bot owns the meeting)."""
+    return _first_visible(page, _role_locators(_root(page), _END), timeout_ms)
 
 
 def waiting_room_indicator(page: Page, timeout_ms: int = 1000) -> Locator | None:

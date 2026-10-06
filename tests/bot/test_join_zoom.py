@@ -1,9 +1,12 @@
-"""Unit tests for the Zoom join script (Z1 spike).
+"""Unit tests for the Zoom join script.
 
-Covers the pre-join flow (fixed name, mic/camera mute semantics), the spike
-loop's exit mapping, the shared ``OREEAI_BOT_RESULT`` line, env parsing, and
-the entrypoint's ``BOT_PLATFORM`` dispatch. All DOM comes from the fakes
-machinery; no browser or container is needed in CI.
+Covers the pre-join flow (fixed name, mic/camera mute semantics), the
+landing-page path into the web client, the fatal-wall detectors, the shared
+``OREEAI_BOT_RESULT`` line, env parsing, and the entrypoint's
+``BOT_PLATFORM`` dispatch. The lifecycle loop itself is covered by
+``tests/bot/test_listeners_zoom.py``; this module only asserts the wiring.
+All DOM comes from the fakes machinery; no browser or container is needed
+in CI.
 """
 
 from __future__ import annotations
@@ -15,86 +18,13 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from bot.listeners import (
-    EXIT_BOT_ERROR,
-    EXIT_NEVER_ADMITTED,
-    EXIT_OK,
-    EXIT_REMOVED,
-    BotOutcome,
-    Timeouts,
-)
-from bot.record_audio import Recorder
+from bot.listeners import EXIT_BOT_ERROR, EXIT_OK, BotOutcome
 
 from bot import join_zoom
-from tests.bot.fakes import FakePage, ScriptedPage
+from tests.bot.fakes import FakePage
 
 FIXTURES = Path(__file__).parent / "fixtures" / "zoom"
 ENTRYPOINT = Path(__file__).parents[2] / "bot" / "entrypoint.sh"
-
-LONG = Timeouts(
-    waiting_room_s=9999.0,
-    empty_room_s=9999.0,
-    alone_grace_s=9999.0,
-    max_record_s=9999.0,
-)
-INSTANT_WAITING = Timeouts(
-    waiting_room_s=0.0,
-    empty_room_s=9999.0,
-    alone_grace_s=9999.0,
-    max_record_s=9999.0,
-)
-
-
-class FakeRecorder(Recorder):
-    """Recorder double: never spawns parec."""
-
-    def __init__(
-        self, is_running_script: list[bool] | None = None, fail_on_start: bool = False
-    ) -> None:
-        super().__init__("/tmp/fake-recording.wav")
-        self.started = False
-        self.stopped = False
-        self.fail_on_start = fail_on_start
-        self._script = list(is_running_script or [])
-
-    def start(self) -> None:
-        if self.fail_on_start:
-            raise RuntimeError("parec exited immediately: fake failure")
-        self.started = True
-
-    def stop(self) -> None:
-        self.stopped = True
-
-    def is_running(self) -> bool:
-        if self._script:
-            return self._script.pop(0)
-        return self.started and not self.stopped
-
-
-def scripted(*names: str) -> ScriptedPage:
-    return ScriptedPage([FIXTURES / f"{name}.html" for name in names])
-
-
-def run(
-    page: ScriptedPage,
-    recorder: FakeRecorder,
-    timeouts: Timeouts,
-    stop_after: int | None = None,
-) -> BotOutcome:
-    calls = 0
-
-    def stop_requested() -> bool:
-        nonlocal calls
-        calls += 1
-        return stop_after is not None and calls > stop_after
-
-    return join_zoom.run_zoom_spike_loop(
-        page,
-        call_id="test-call",
-        recorder=recorder,
-        timeouts=timeouts,
-        stop_requested=stop_requested,
-    )
 
 
 # --- pre-join flow ---------------------------------------------------------
@@ -219,105 +149,13 @@ def test_fatal_walls_map_to_exit_5(fixture: str) -> None:
     assert outcome.reason
 
 
-# --- spike loop exit mapping ----------------------------------------------
+# --- wiring ----------------------------------------------------------------
 
 
-def test_spike_loop_admits_records_and_ends() -> None:
-    recorder = FakeRecorder()
-
-    outcome = run(
-        scripted("zoom_waiting_room", "zoom_in_call", "zoom_in_call", "zoom_ended"),
-        recorder,
-        LONG,
-    )
-
-    assert outcome.exit_code == EXIT_OK
-    assert outcome.end_reason == "call_ended"
-    assert outcome.recording_started is True
-    assert recorder.started is True
-    assert recorder.stopped is True
-
-
-def test_spike_loop_never_admitted() -> None:
-    recorder = FakeRecorder()
-
-    outcome = run(scripted("zoom_waiting_room"), recorder, INSTANT_WAITING)
-
-    assert outcome.exit_code == EXIT_NEVER_ADMITTED
-    assert outcome.end_reason is None
-    assert outcome.recording_started is False
-    assert recorder.started is False
-
-
-def test_spike_loop_removed_mid_call() -> None:
-    recorder = FakeRecorder()
-
-    outcome = run(scripted("zoom_in_call", "zoom_removed"), recorder, LONG)
-
-    assert outcome.exit_code == EXIT_REMOVED
-    assert outcome.end_reason == "removed"
-    assert outcome.recording_started is True
-    assert recorder.stopped is True
-
-
-def test_spike_loop_give_up_on_max_duration() -> None:
-    timeouts = Timeouts(
-        waiting_room_s=9999.0,
-        empty_room_s=9999.0,
-        alone_grace_s=9999.0,
-        max_record_s=0.0,
-    )
-    recorder = FakeRecorder()
-
-    outcome = run(scripted("zoom_in_call"), recorder, timeouts)
-
-    assert outcome.exit_code == EXIT_OK
-    assert outcome.end_reason == "give_up"
-    assert recorder.stopped is True
-
-
-def test_spike_loop_recorder_death_is_exit_5() -> None:
-    recorder = FakeRecorder(is_running_script=[False])
-
-    outcome = run(scripted("zoom_in_call", "zoom_in_call"), recorder, LONG)
-
-    assert outcome.exit_code == EXIT_BOT_ERROR
-    assert outcome.end_reason is None
-    assert recorder.stopped is True
-
-
-def test_spike_loop_stop_before_recording() -> None:
-    recorder = FakeRecorder()
-
-    outcome = run(scripted("zoom_waiting_room"), recorder, LONG, stop_after=2)
-
-    assert outcome.exit_code == EXIT_OK
-    assert outcome.end_reason is None
-    assert outcome.recording_started is False
-    assert recorder.started is False
-
-
-def test_spike_loop_stop_after_recording() -> None:
-    recorder = FakeRecorder()
-
-    outcome = run(scripted("zoom_in_call"), recorder, LONG, stop_after=3)
-
-    assert outcome.exit_code == EXIT_OK
-    assert outcome.end_reason is None
-    assert outcome.recording_started is True
-    assert recorder.stopped is True
-
-
-# --- audio graph hook ------------------------------------------------------
-
-
-def test_join_computer_audio_clicks_dialog_and_leaves_muted_mic_alone() -> None:
-    page = FakePage.from_fixture(FIXTURES / "zoom_audio_dialog.html")
-
-    join_zoom._join_computer_audio(page)
-
-    assert "Join with computer audio" in page.clicked
-    assert "Unmute my microphone" not in page.clicked
+def test_spike_loop_is_absorbed_by_listeners_zoom() -> None:
+    """Z2 replaced the Z1 spike loop with the full lifecycle module."""
+    assert not hasattr(join_zoom, "run_zoom_spike_loop")
+    assert callable(join_zoom.run_call_loop)
 
 
 # --- env parsing and the shared result line --------------------------------
