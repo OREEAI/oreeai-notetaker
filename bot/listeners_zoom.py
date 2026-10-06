@@ -62,6 +62,12 @@ logger = logging.getLogger("oreeai.bot.zoom.states")
 # the dialog.
 AUDIO_DIALOG_TIMEOUT_MS = 8000
 
+# Leave is best-effort on the way out and can sit under a Zoom onboarding
+# banner (live 2026-10-06: the click waits Playwright's default 30 s, which
+# overruns `docker stop`'s 10 s grace and gets the recording SIGKILLed).
+# Bound it so the stop path always finalizes inside the grace.
+LEAVE_CLICK_TIMEOUT_MS = 2500
+
 _FROM_JOIN_CLICKED = "join_clicked"
 _WAITING_ROOM = "waiting_room"
 _IN_CALL = "in_call"
@@ -196,7 +202,7 @@ def _leave_zoom(page: Page) -> None:
         return
     try:
         move_to(page, button)
-        click_like_human(button)
+        click_like_human(button, timeout_ms=LEAVE_CLICK_TIMEOUT_MS)
         logger.info("leave clicked")
     except Exception:
         logger.warning("leave control click failed; browser shutdown will end the Zoom session")

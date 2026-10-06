@@ -62,6 +62,11 @@ def type_text(
         page.keyboard.type(char)
 
 
-def click_like_human(target: Locator) -> None:
-    """Click with a human-length press and release."""
-    target.click(delay=int(_jitter(60, 140)))
+def click_like_human(target: Locator, *, timeout_ms: int | None = None) -> None:
+    """Click with a human-length press and release.
+
+    ``timeout_ms`` bounds the actionability wait for best-effort controls
+    (Zoom's leave control sits under onboarding banners); the default keeps
+    Playwright's own timeout, so existing callers are unchanged.
+    """
+    target.click(delay=int(_jitter(60, 140)), timeout=timeout_ms)

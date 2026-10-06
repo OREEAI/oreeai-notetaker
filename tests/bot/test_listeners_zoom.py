@@ -17,7 +17,12 @@ from bot.listeners import (
     BotOutcome,
     Timeouts,
 )
-from bot.listeners_zoom import _join_computer_audio, run_call_loop
+from bot.listeners_zoom import (
+    LEAVE_CLICK_TIMEOUT_MS,
+    _join_computer_audio,
+    _leave_zoom,
+    run_call_loop,
+)
 from bot.record_audio import Recorder
 
 from tests.bot.fakes import FakePage, ScriptedPage
@@ -427,3 +432,22 @@ def test_computer_audio_attempted_once_after_admission(
 
     assert outcome.exit_code == EXIT_OK
     assert calls == [1]
+
+
+def test_leave_click_is_bounded_for_fast_stop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SIGTERM smoke (2026-10-06): the leave control can sit under a Zoom
+    onboarding banner; an unbounded Playwright click waits ~30 s, overruns
+    docker's 10 s stop grace, and the WAV gets SIGKILLed. The leave click
+    must therefore carry the bounded timeout.
+    """
+    calls: list[int | None] = []
+
+    def fake_click(target: object, *, timeout_ms: int | None = None) -> None:
+        calls.append(timeout_ms)
+
+    monkeypatch.setattr("bot.listeners_zoom.click_like_human", fake_click)
+    page = FakePage.from_fixture(FIXTURES / "zoom_in_call.html")
+
+    _leave_zoom(page)
+
+    assert calls == [LEAVE_CLICK_TIMEOUT_MS]
