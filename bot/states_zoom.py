@@ -41,7 +41,9 @@ class SelectorSet(Protocol):
     waiting_room_indicator: SelectorQuery
     meeting_not_started_indicator: SelectorQuery
     removed_indicator: SelectorQuery
+    removed_dialog: SelectorQuery
     call_ended_indicator: SelectorQuery
+    meeting_ended_dialog: SelectorQuery
     participant_count_button: SelectorQuery
     alone_hint: SelectorQuery
     passcode_input: SelectorQuery
@@ -165,21 +167,44 @@ def is_admitted(page: Page, selector_set: SelectorSet = _DEFAULT_SELECTOR_SET) -
 
 
 def is_removed(page: Page, selector_set: SelectorSet = _DEFAULT_SELECTOR_SET) -> tuple[bool, str]:
-    """Whether Zoom reports that the bot was removed from the meeting."""
-    removed = selector_set.removed_indicator(page, timeout_ms=_POLL_TIMEOUT_MS)
-    if removed is not None:
-        return True, f"removed from meeting: {_locator_detail(removed)}"
-    return False, "no removal notice visible"
+    """Whether Zoom reports that the bot was removed from the meeting.
+
+    The live terminal screen (2026-10-06) is a modal ``role=dialog`` over
+    the still-present in-call toolbar, so the dialog is checked first.
+    Free-standing removal text is trusted only when the in-call controls
+    are gone: the same words can ride in on chat or notification copy, and
+    that must never end a live call (Meet's 2026-09-09 lesson).
+    """
+    dialog = selector_set.removed_dialog(page, timeout_ms=_POLL_TIMEOUT_MS)
+    if dialog is not None:
+        return True, f"removed from meeting (dialog): {_locator_detail(dialog)}"
+    notice = selector_set.removed_indicator(page, timeout_ms=_POLL_TIMEOUT_MS)
+    if notice is None:
+        return False, "no removal notice visible"
+    controls, _ = in_call_controls(page, selector_set)
+    if controls:
+        return False, "removal text visible mid-call with in-call controls (chat copy?)"
+    return True, f"removed from meeting: {_locator_detail(notice)}"
 
 
 def is_call_ended(
     page: Page, selector_set: SelectorSet = _DEFAULT_SELECTOR_SET
 ) -> tuple[bool, str]:
-    """Whether Zoom reports that the meeting has ended."""
-    ended = selector_set.call_ended_indicator(page, timeout_ms=_POLL_TIMEOUT_MS)
-    if ended is not None:
-        return True, f"call ended: {_locator_detail(ended)}"
-    return False, "no call-ended notice visible"
+    """Whether Zoom reports that the meeting has ended.
+
+    Dialog-first like :func:`is_removed`; free-standing "meeting ended"
+    text is trusted only with the in-call controls gone.
+    """
+    dialog = selector_set.meeting_ended_dialog(page, timeout_ms=_POLL_TIMEOUT_MS)
+    if dialog is not None:
+        return True, f"call ended (dialog): {_locator_detail(dialog)}"
+    notice = selector_set.call_ended_indicator(page, timeout_ms=_POLL_TIMEOUT_MS)
+    if notice is None:
+        return False, "no call-ended notice visible"
+    controls, _ = in_call_controls(page, selector_set)
+    if controls:
+        return False, "ended text visible mid-call with in-call controls (chat copy?)"
+    return True, f"call ended: {_locator_detail(notice)}"
 
 
 def participant_count(

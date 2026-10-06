@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from playwright.sync_api import FrameLocator, Locator, Page
 
-Role = Literal["button", "textbox", "link"]
+Role = Literal["button", "textbox", "link", "dialog"]
 RoleQuery = tuple[Role, re.Pattern[str]]
 
 # The web client iframe (live 2026-10-05 evidence: id="webclient",
@@ -90,9 +90,12 @@ _COOKIE_ACCEPT: tuple[RoleQuery, ...] = (
 )
 # Waiting-room vs. meeting-not-started are deliberately disjoint patterns:
 # the queue contract requires two separate predicates, never one heuristic.
+# Live 2026-10-06 knock screen: "Host has joined. We've let them know you're
+# here." (typographic apostrophes); the earlier drafts stay as variants.
 _WAITING_ROOM: re.Pattern[str] = re.compile(
     r"waiting for the host to let you in.*|host will let you in.*|"
-    r"you are in the waiting room.*|please wait until the host.*",
+    r"you are in the waiting room.*|please wait until the host.*|"
+    r"we[\u2019']?ve let them know you[\u2019']?re here.*|host has joined.*",
     re.IGNORECASE,
 )
 _MEETING_NOT_STARTED: re.Pattern[str] = re.compile(
@@ -107,7 +110,7 @@ _REMOVED: re.Pattern[str] = re.compile(
 )
 _CALL_ENDED: re.Pattern[str] = re.compile(
     r"meeting has been ended.*|has ended by (the )?host.*|host ended the meeting.*|"
-    r"meeting ended.*",
+    r"meeting ended.*|meeting is end.*",
     re.IGNORECASE,
 )
 # Zoom's alone cue inside the participant panel. The reliable signal is the
@@ -245,8 +248,27 @@ def removed_indicator(page: Page, timeout_ms: int = 1000) -> Locator | None:
     return _first_visible(page, _text_locators(_root(page), (_REMOVED,)), timeout_ms)
 
 
+def removed_dialog(page: Page, timeout_ms: int = 1000) -> Locator | None:
+    """Zoom's removal notice as a modal dialog (live 2026-10-06).
+
+    The real screen overlays the still-present in-call toolbar with a
+    ``role=dialog`` whose accessible name is "You have been removed".
+    """
+    return _first_visible(page, _role_locators(_root(page), (("dialog", _REMOVED),)), timeout_ms)
+
+
 def call_ended_indicator(page: Page, timeout_ms: int = 1000) -> Locator | None:
     return _first_visible(page, _text_locators(_root(page), (_CALL_ENDED,)), timeout_ms)
+
+
+def meeting_ended_dialog(page: Page, timeout_ms: int = 1000) -> Locator | None:
+    """Zoom's meeting-ended notice as a modal dialog (live 2026-10-06).
+
+    The real screen overlays the still-present in-call toolbar with a
+    ``role=dialog`` whose accessible name is "Meeting is end now" and whose
+    text is "This meeting has been ended by host".
+    """
+    return _first_visible(page, _role_locators(_root(page), (("dialog", _CALL_ENDED),)), timeout_ms)
 
 
 def participant_count_button(page: Page, timeout_ms: int = 1000) -> Locator | None:

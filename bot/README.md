@@ -311,8 +311,10 @@ Zoom specifics:
 - **Waiting room vs. host-not-started.** Both screens keep the bot
   waiting and both end at `BOT_WAITING_ROOM_TIMEOUT` with exit `2`; the
   host-not-started terminal logs a `meeting-not-started timeout ...`
-  reason so the two are distinguishable. Once the host starts or admits
-  the bot, the same loop picks up admission and starts recording.
+  reason so the two are distinguishable. (The live knock screen reads
+  "Host has joined. We've let them know you're here.") Once the host
+  starts or admits the bot, the same loop picks up admission and starts
+  recording.
 - **Admission evidence** is the in-call toolbar (the `Leave` control, or
   `End` when Zoom promotes the bot to host), never the mere absence of
   the pre-join form: Zoom's waiting-room and removed screens can render
@@ -322,10 +324,13 @@ Zoom specifics:
   Zoom hands the host role to the bot: `Leave` becomes `End` and a
   "You are host now." hint appears. That is still an in-call, alone
   state feeding the normal participant/alone logic — never a dead call.
-- **Ambiguous notices.** Removal/ended text can ride in on chat or
-  notification copy; while the in-call toolbar is present the loop keeps
-  recording. The notice is honored once the toolbar is gone; if the
-  toolbar disappears with no notice, three polls (~6 s) confirm a clean
+- **Terminal notices are dialog-scoped.** Live 2026-10-06: removal and
+  host-end render as modal dialogs ("You have been removed" / "This
+  meeting has been ended by host") over the still-present toolbar, so the
+  predicates match the dialog and honor it immediately. Free-standing
+  text that merely matches the wording (chat/notification copy) is
+  discarded while the in-call toolbar is present. If the toolbar
+  disappears with no notice, three polls (~6 s) confirm a clean
   `call_ended` (Meet's counter).
 - **Empty room vs. alone.** The Meet rules apply: admission into a room
   that never had another participant is the empty-room case (exit `4`,

@@ -345,14 +345,15 @@ def run_call_loop(
             page.wait_for_timeout(int(poll_interval_s * 1000))
             continue
 
-        # The in-call toolbar (Leave, or End once the bot is host) is the
-        # admission anchor: a removal/ended notice while it is present is
-        # chat or notification copy, and must not end a live call. The
-        # notice is honored only once the anchor is gone (the real terminal
-        # screens replace the toolbar).
-        anchor, anchor_detail = states_zoom.in_call_controls(page)
+        # Terminal screens are dialog-scoped by the predicates: the real
+        # removal/ended notices are modals over a still-present toolbar,
+        # while matching chat copy with the toolbar present is discarded as
+        # ambiguous there. Honor a detected terminal immediately (Meet's
+        # order), keeping the in-call toolbar as the anchor for the
+        # participant/alone logic and the missed-control counter.
+        anchor, _ = states_zoom.in_call_controls(page)
 
-        if removed and not anchor:
+        if removed:
             try:
                 recorder.stop()
                 logger.info("recording stopped")
@@ -361,7 +362,7 @@ def run_call_loop(
             logger.info("removed from meeting")
             return BotOutcome(EXIT_REMOVED, "removed", removed_detail, recording_started=True)
 
-        if ended and not anchor:
+        if ended:
             try:
                 recorder.stop()
                 logger.info("recording stopped")
@@ -369,13 +370,6 @@ def run_call_loop(
                 _log_transition(call_id, phase, "call_ended", ended_detail)
             logger.info("call ended")
             return BotOutcome(EXIT_OK, "call_ended", ended_detail, recording_started=True)
-
-        if removed or ended:
-            logger.warning(
-                "removal/ended notice text visible mid-call while the in-call controls "
-                "are present (%s); staying in the call",
-                anchor_detail,
-            )
 
         if not recorder.is_running():
             debug_screenshot(page, "recorder process ended")

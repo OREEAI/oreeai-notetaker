@@ -143,13 +143,17 @@ def test_host_not_started_until_deadline_has_distinct_reason() -> None:
 
 
 def test_waiting_room_leave_control_never_reads_as_admission() -> None:
-    """Live lesson from Meet (2026-09-09): the admission-wait page renders a
-    leave control of its own. The waiting notice overrides it — no recording
-    and no empty-room timer until true admission.
+    """Live lesson from Meet (2026-09-09): the admission-wait page can
+    render a leave control of its own. The waiting notice overrides it — no
+    recording and no empty-room timer until true admission.
     """
     recorder = FakeRecorder()
     outcome = run(
-        scripted("zoom_waiting_room", "zoom_waiting_room", "zoom_waiting_room"),
+        scripted(
+            "zoom_waiting_room_with_leave",
+            "zoom_waiting_room_with_leave",
+            "zoom_waiting_room_with_leave",
+        ),
         recorder,
         LONG,
         stop_after=2,
