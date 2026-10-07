@@ -241,6 +241,7 @@ recording is happening — without being told beforehand. The policy lives in
 | `PAREC_DEVICE` | no | `virtual_speaker.monitor` | Diagnostic PulseAudio-device override for `parec`. Pointing it at `silent_sink.monitor` exercises the silence path with a live recorder and a silent source. |
 | `BOT_AUTH_MODE` | no | `anonymous` | Join identity: `anonymous` (guest) or `authenticated` (signed-in via the persistent profile). Production runs use `authenticated`. |
 | `BOT_PROFILE_DIR` | no | `/profile` | Container-side Chrome profile path for authenticated mode. The Makefile mounts the host profile dir here. |
+| `BOT_PLATFORM` | no | `meet` | Platform dispatch: `meet` (unchanged) or `zoom` (Zoom web-client join + lifecycle via `bot.join_zoom`). Unknown values fail fast with exit `5` before any browser work. |
 | `BOT_ENTRY_MODE` | no | `run` | `run` starts the bot; `login` (used by `make bot-login`) starts the interactive sign-in bootstrap with noVNC. |
 | `BOT_LOGIN_TIMEOUT` | no | `600` | Seconds `make bot-login` waits for the sign-in to complete. |
 
@@ -281,6 +282,74 @@ Participant counts include the bot. Meet does not always put the number in
 the participants control's accessible name, so the bot also reads the visible
 count badge and treats Meet's "only one here" text as corroboration. An
 unknown count is never treated as an empty room.
+
+## Join lifecycle (Zoom)
+
+`bot/join_zoom.py` performs the humanized Zoom pre-join flow (landing
+"Join from browser" click-through, name, mic/camera mute) and owns browser
+startup/shutdown, the recorder, the silence check, and the process exit
+code. `bot/states_zoom.py` contains the side-effect-free Zoom DOM
+predicates; `bot/listeners_zoom.py` polls about every two seconds, logs
+transitions, starts/stops recording, and leaves. Zoom runs share the same
+env vars, the same exit-code table, and the same `OREEAI_BOT_RESULT` line.
+
+```text
+join_clicked
+  -> waiting_room (waiting room OR host-not-started; both keep waiting)
+    -> in_call (admitted; recorder starts)
+      -> call_ended (exit 0)
+      -> removed (exit 3; WAV kept up to the removal)
+      -> alone (exit 0 after BOT_ALONE_GRACE)
+      -> give_up (exit 0 after BOT_MAX_RECORD_DURATION)
+      -> empty_room (exit 4 after BOT_EMPTY_ROOM_TIMEOUT)
+      -> bot_error (exit 5: recorder died or room stayed undetectable)
+    -> never_admitted (exit 2 after BOT_WAITING_ROOM_TIMEOUT)
+```
+
+Zoom specifics:
+
+- **Waiting room vs. host-not-started.** Both screens keep the bot
+  waiting and both end at `BOT_WAITING_ROOM_TIMEOUT` with exit `2`; the
+  host-not-started terminal logs a `meeting-not-started timeout ...`
+  reason so the two are distinguishable. (The live knock screen reads
+  "Host has joined. We've let them know you're here.") Once the host
+  starts or admits the bot, the same loop picks up admission and starts
+  recording.
+- **Admission evidence** is the in-call toolbar (the `Leave` control, or
+  `End` when Zoom promotes the bot to host), never the mere absence of
+  the pre-join form: Zoom's waiting-room and removed screens can render
+  controls of their own. Waiting/not-started notices override the toolbar
+  for admission.
+- **Host promotion.** When the meeting host leaves while others remain,
+  Zoom hands the host role to the bot: `Leave` becomes `End` and a
+  "You are host now." hint appears. That is still an in-call, alone
+  state feeding the normal participant/alone logic — never a dead call.
+- **Terminal notices are dialog-scoped.** Live 2026-10-06: removal and
+  host-end render as modal dialogs ("You have been removed" / "This
+  meeting has been ended by host") over the still-present toolbar, so the
+  predicates match the dialog and honor it immediately. Free-standing
+  text that merely matches the wording (chat/notification copy) is
+  discarded while the in-call toolbar is present. If the toolbar
+  disappears with no notice, three polls (~6 s) confirm a clean
+  `call_ended` (Meet's counter).
+- **Empty room vs. alone.** The Meet rules apply: admission into a room
+  that never had another participant is the empty-room case (exit `4`,
+  runner `no_show` after recording began); `end_reason=alone` requires
+  having seen two participants first.
+- **Fast-fail screens (exit 5):** sign-in required (guest CAPTCHA wall —
+  Z3's signed-in mode is the fallback), "only authenticated users",
+  desktop-app/E2EE required, and missing/rejected passcode (`?pwd=` is
+  consumed at pre-join; never a retry loop).
+- **Participant counts** come from Zoom's participants control (`[2]`
+  bracket aria or `N\nParticipants` text, including the "manage
+  participants" host variant). An unknown count is never treated as an
+  empty room: it exits `5` after `BOT_EMPTY_ROOM_TIMEOUT` with periodic
+  evidence every 30 s.
+
+For Zoom runs use `make bot-run MEETING_URL=<zoom link> BOT_PLATFORM=zoom
+CONSENT_ACK=true` (the default `BOT_PLATFORM` is `meet`, unchanged). As
+with Meet, the `bot finished: exit_code=N` log line is the container
+exit-code ground truth (make's own exit status is not).
 
 ## Exit codes
 

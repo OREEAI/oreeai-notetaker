@@ -1,4 +1,4 @@
-"""Tier-2 docker tests for the Z1 platform dispatch (docker marker).
+"""Tier-2 docker tests for the platform dispatch and Zoom wiring (docker marker).
 
 Mirrors the manual entrypoint scenarios that do not need a live Zoom
 meeting: the real image boots the same Xvfb/PulseAudio graph and the
@@ -72,6 +72,34 @@ def test_zoom_platform_dispatches_to_join_zoom(bot_image: str) -> None:
     assert "OREEAI_BOT_RESULT " in output
     payload = json.loads(output.split("OREEAI_BOT_RESULT ", 1)[1].splitlines()[0])
     assert payload == {"call_id": "spike", "end_reason": None, "exit_code": 5}
+
+
+def test_zoom_fast_fail_on_unreachable_meeting(bot_image: str) -> None:
+    """The real image runs the Zoom lifecycle module on a fast-failing URL.
+
+    Navigation error -> shared exit 5 + result line, proving the Z2
+    ``join_zoom -> listeners_zoom`` wiring imports and runs inside the
+    container without a live meeting.
+    """
+    proc = _docker(
+        "run",
+        "--rm",
+        "-e",
+        "BOT_PLATFORM=zoom",
+        "-e",
+        "CONSENT_ACK=true",
+        "-e",
+        "MEETING_URL=https://127.0.0.1:9/",
+        bot_image,
+    )
+    output = _output(proc)
+
+    assert proc.returncode == 5
+    assert "platform=zoom" in output
+    assert "OREEAI_BOT_RESULT " in output
+    payload = json.loads(output.split("OREEAI_BOT_RESULT ", 1)[1].splitlines()[0])
+    assert payload == {"call_id": "spike", "end_reason": None, "exit_code": 5}
+    assert "bot finished: exit_code=5" in output
 
 
 def test_default_platform_still_runs_the_meet_module(bot_image: str) -> None:

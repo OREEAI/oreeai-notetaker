@@ -55,7 +55,11 @@ def test_landing_without_browser_link_has_no_wall_text() -> None:
     assert states_zoom.is_sign_in_required(landing)[0] is False
 
 
-def test_waiting_room_with_leave_control_never_reads_as_admitted() -> None:
+def test_waiting_room_real_knock_screen() -> None:
+    """Live 2026-10-06 knock screen: "Host has joined. We've let them know
+    you're here." with preview controls (Mute / Start Video / Exit) and no
+    in-call toolbar.
+    """
     waiting_page = page("zoom_waiting_room.html")
     waiting, waiting_detail = states_zoom.is_in_waiting_room(waiting_page)
     admitted, _ = states_zoom.is_admitted(waiting_page)
@@ -67,6 +71,21 @@ def test_waiting_room_with_leave_control_never_reads_as_admitted() -> None:
     assert admitted is False
     assert prejoin is False
     assert count is None
+
+
+def test_waiting_room_with_leave_control_never_reads_as_admitted() -> None:
+    """Defensive override: if a waiting-room build renders its own leave
+    control, the notice must still veto admission (Meet's knock-page rule).
+    """
+    waiting_page = page("zoom_waiting_room_with_leave.html")
+    waiting, waiting_detail = states_zoom.is_in_waiting_room(waiting_page)
+    admitted, _ = states_zoom.is_admitted(waiting_page)
+    prejoin, _ = states_zoom.is_prejoin(waiting_page)
+
+    assert waiting is True
+    assert waiting_detail
+    assert admitted is False
+    assert prejoin is False
 
 
 def test_meeting_not_started_is_distinct_from_waiting_room() -> None:
@@ -96,19 +115,35 @@ def test_in_call_states() -> None:
 
 
 def test_removed_and_ended_notices() -> None:
+    """Live 2026-10-06: both terminal screens are modal dialogs over the
+    still-present in-call toolbar, so detection is dialog-scoped."""
     removed_page = page("zoom_removed.html")
     removed, removed_detail = states_zoom.is_removed(removed_page)
     admitted, _ = states_zoom.is_admitted(removed_page)
 
     assert removed is True
     assert removed_detail
-    assert admitted is False
+    # The toolbar is still in the DOM under the dialog — admission alone
+    # must never mask the terminal notice.
+    assert admitted is True
 
     ended_page = page("zoom_ended.html")
     ended, ended_detail = states_zoom.is_call_ended(ended_page)
 
     assert ended is True
     assert ended_detail
+
+
+def test_terminal_text_with_in_call_controls_is_chat_copy() -> None:
+    """Chat/notification copy that matches the ended wording must not read
+    as a terminal while the in-call toolbar is present."""
+    chat = page("zoom_in_call_notice_text.html")
+
+    ended, _ = states_zoom.is_call_ended(chat)
+    removed, _ = states_zoom.is_removed(chat)
+
+    assert ended is False
+    assert removed is False
 
 
 @pytest.mark.parametrize(
@@ -142,6 +177,28 @@ def test_bot_alone_signals() -> None:
     assert unknown is False
 
 
+def test_host_transferred_in_call_states() -> None:
+    """Live 2026-10-06: when the host left, Zoom promoted the bot to host —
+    the toolbar swapped Leave for End and the state was still in-call,
+    alone, count=1. The predicates must read the host variant as in-call.
+    """
+    host = page("zoom_in_call_host_alone.html")
+    admitted, admitted_detail = states_zoom.is_admitted(host)
+    prejoin, _ = states_zoom.is_prejoin(host)
+    count, count_detail = states_zoom.participant_count(host)
+    alone, alone_detail = states_zoom.bot_alone_in_call(host)
+
+    assert admitted is True
+    assert admitted_detail
+    assert prejoin is False
+    assert count == 1
+    assert count_detail
+    assert alone is True
+    assert alone_detail
+    assert selectors_zoom.end_button(host, timeout_ms=0) is not None
+    assert selectors_zoom.leave_button(host, timeout_ms=0) is None
+
+
 @pytest.mark.parametrize(
     ("fixture", "predicate"),
     [
@@ -159,7 +216,13 @@ def test_error_surfaces(fixture: str, predicate: Callable[[FakePage], tuple[bool
 
 
 def test_error_surfaces_quiet_on_normal_pages() -> None:
-    for fixture in ("zoom_landing.html", "zoom_prejoin.html", "zoom_in_call.html"):
+    for fixture in (
+        "zoom_landing.html",
+        "zoom_prejoin.html",
+        "zoom_waiting_room.html",
+        "zoom_meeting_not_started.html",
+        "zoom_in_call.html",
+    ):
         normal = page(fixture)
         assert states_zoom.is_sign_in_required(normal)[0] is False
         assert states_zoom.is_only_authenticated(normal)[0] is False
