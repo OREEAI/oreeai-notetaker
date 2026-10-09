@@ -68,6 +68,12 @@ AUDIO_DIALOG_TIMEOUT_MS = 8000
 # Bound it so the stop path always finalizes inside the grace.
 LEAVE_CLICK_TIMEOUT_MS = 2500
 
+# The post-admission media re-mute is best-effort and targets the same
+# below-the-fold footer as the chat/leave controls (live 2026-10-09: an
+# unbounded trusted click retried ~30 s, overrunning `docker stop`'s grace
+# when the stop landed in that window). Bound it like the leave click.
+MUTE_CLICK_TIMEOUT_MS = 2500
+
 _FROM_JOIN_CLICKED = "join_clicked"
 _WAITING_ROOM = "waiting_room"
 _IN_CALL = "in_call"
@@ -123,7 +129,7 @@ def _mute_media(
         return True
     try:
         move_to(page, locator)
-        click_like_human(locator)
+        click_like_human(locator, timeout_ms=MUTE_CLICK_TIMEOUT_MS)
     except Exception:
         if required:
             logger.error("%s toggle click failed; refusing to join unmuted (echo risk)", label)
@@ -263,6 +269,7 @@ def run_call_loop(
     timeouts: Timeouts,
     stop_requested: Callable[[], bool],
     poll_interval_s: float = POLL_INTERVAL_S,
+    announce: Callable[[Page], None] | None = None,
 ) -> BotOutcome:
     """Poll Zoom state from join-click through a terminal lifecycle outcome.
 
@@ -272,6 +279,10 @@ def run_call_loop(
     ``BOT_WAITING_ROOM_TIMEOUT``. While recording, removal/ended notices are
     trusted only once the in-call anchor is gone: the same text can ride in
     on chat or notification copy, and a live call must never be ended by it.
+
+    ``announce`` runs exactly once, right after recording starts (the PR 3
+    in-call consent announcement). It is best-effort: an exception is logged
+    and never affects the lifecycle.
     """
     start = _now()
     phase = _WAITING_ROOM
@@ -279,6 +290,7 @@ def run_call_loop(
 
     admitted_at = 0.0
     recording_started = False
+    announced = False
     saw_others = False
     alone_since: float | None = None
     unknown_since: float | None = None
@@ -312,6 +324,12 @@ def run_call_loop(
                 unknown_since = now
                 next_unknown_evidence = now + UNKNOWN_ROOM_EVIDENCE_INTERVAL_S
                 logger.info("recording started")
+                if announce is not None and not announced:
+                    announced = True
+                    try:
+                        announce(page)
+                    except Exception:
+                        logger.exception("post-recording announcement failed; continuing")
                 try:
                     _join_computer_audio(page)
                 except Exception:

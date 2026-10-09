@@ -9,9 +9,10 @@ The current web client renders its pre-join and in-call UI inside a
 same-origin iframe (``id="webclient"``) on ``app.zoom.us``. Every selector
 function therefore resolves that frame first and falls back to the page
 itself (the landing page, and older builds that render inline). Patterns
-below are pinned to the Z1 live join session (2026-10-05) and to the Z2
-live lifecycle session (2026-10-06: host promotion swaps Leave for End),
-plus the snapshots in ``tests/bot/fixtures/zoom/``.
+below are pinned to the Z1 live join session (2026-10-05), the Z2 live
+lifecycle session (2026-10-06: host promotion swaps Leave for End), and the
+Z3 live chat-panel session (2026-10-08), plus the snapshots in
+``tests/bot/fixtures/zoom/``.
 
 Every function takes a Playwright ``Page`` and returns the first matching
 visible element, or ``None`` when nothing matched within the timeout.
@@ -77,6 +78,22 @@ _LEAVE: tuple[RoleQuery, ...] = (
 # Host-mode departure control (live 2026-10-06): when the original host left,
 # Zoom promoted the bot to host and the toolbar swapped "Leave" for "End".
 _END: tuple[RoleQuery, ...] = (("button", re.compile(r"^\s*end( meeting)?\s*$", re.IGNORECASE)),)
+# In-call chat panel (Z3 live 2026-10-08). The footer control carries the
+# accessible name "open the chat panel" (visible text "Chat") and flips to
+# "close the chat panel" while the panel is open, so only the open form is
+# matched. The mid-panel live build is a bare ``contenteditable`` div with
+# no role or accessible name; the role queries stay first for builds that
+# expose one.
+_CHAT_OPEN: tuple[RoleQuery, ...] = (
+    ("button", re.compile(r"^open the chat panel.*", re.IGNORECASE)),
+    ("button", re.compile(r"^chat( panel)?$", re.IGNORECASE)),
+)
+_CHAT_MESSAGE_BOX: tuple[RoleQuery, ...] = (
+    ("textbox", re.compile(r"type (a )?message.*", re.IGNORECASE)),
+    ("textbox", re.compile(r"(send a )?message.*", re.IGNORECASE)),
+)
+# Live send control: aria "send", disabled until the composer holds text.
+_CHAT_SEND: tuple[RoleQuery, ...] = (("button", re.compile(r"^\s*send\s*$", re.IGNORECASE)),)
 # Live in-call control: aria "open the participants list pane,[2] particpants"
 # (Zoom's typo) with visible text "2\nParticipants". Host mode says "open the
 # manage participants list pane,...".
@@ -281,6 +298,24 @@ def alone_hint(page: Page, timeout_ms: int = 1000) -> Locator | None:
 
 def cookie_accept_button(page: Page, timeout_ms: int = 1000) -> Locator | None:
     return _first_visible(page, _role_locators(page, _COOKIE_ACCEPT), timeout_ms)
+
+
+def chat_open_button(page: Page, timeout_ms: int = 1000) -> Locator | None:
+    """The in-call footer control that opens the chat panel."""
+    return _first_visible(page, _role_locators(_root(page), _CHAT_OPEN), timeout_ms)
+
+
+def chat_message_box(page: Page, timeout_ms: int = 1000) -> Locator | None:
+    """The chat composer (live build: a bare ``contenteditable`` div)."""
+    root = _root(page)
+    locators = _role_locators(root, _CHAT_MESSAGE_BOX)
+    locators.append(root.locator('[contenteditable="true"]'))
+    return _first_visible(page, locators, timeout_ms)
+
+
+def chat_send_button(page: Page, timeout_ms: int = 1000) -> Locator | None:
+    """The chat panel's send control."""
+    return _first_visible(page, _role_locators(_root(page), _CHAT_SEND), timeout_ms)
 
 
 def passcode_input(page: Page, timeout_ms: int = 1000) -> Locator | None:

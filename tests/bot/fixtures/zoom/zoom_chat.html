@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Zoom Meeting - chat panel</title>
+</head>
+<body>
+<!-- Live 2026-10-08 (plans/handoffs/zoom-evidence/z3_chat): the footer chat
+     control carries aria "open the chat panel" (text "Chat"); the panel's
+     composer is a bare contenteditable div with no role/aria; the send
+     control is aria "send" and starts disabled until the composer holds
+     text. Trusted Playwright clicks are ignored by the client; DOM clicks
+     reach the Vue handlers. -->
+<main>
+<footer role="presentation">
+<button type="button" role="button" aria-label="mute my microphone">Mute</button>
+<button type="button" role="button" aria-label="Video">Video</button>
+<button type="button" role="button" aria-label="open the participants list pane,[2] particpants">2
+Participants</button>
+<button type="button" role="button" aria-label="open the chat panel">Chat</button>
+<button type="button" role="button" aria-label="Leave">Leave</button>
+</footer>
+<aside aria-label="Chat">
+<button type="button" role="button" aria-label="Chat Settings"></button>
+<div role="application" aria-label="Chat Message List">Messages addressed to "Meeting Group Chat" will also appear in the meeting group chat in Team Chat</div>
+<button type="button" role="button" aria-label="Send chat to Meeting Group Chat please select a receiver">Meeting Group Chat</button>
+<div contenteditable="true"></div>
+<button type="button" role="button" aria-label="send"></button>
+</aside>
+</main>
+</body>
+</html>

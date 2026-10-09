@@ -5,6 +5,7 @@ exit path executes in CI with no browser. Zero-valued timeouts make timing
 deterministic: any elapsed real time already exceeds them.
 """
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -19,12 +20,15 @@ from bot.listeners import (
 )
 from bot.listeners_zoom import (
     LEAVE_CLICK_TIMEOUT_MS,
+    MUTE_CLICK_TIMEOUT_MS,
     _join_computer_audio,
     _leave_zoom,
+    _mute_media,
     run_call_loop,
 )
 from bot.record_audio import Recorder
 
+from bot import selectors_zoom
 from tests.bot.fakes import FakePage, ScriptedPage
 
 FIXTURES = Path(__file__).parent / "fixtures" / "zoom"
@@ -87,6 +91,7 @@ def run(
     recorder: FakeRecorder,
     timeouts: Timeouts,
     stop_after: int | None = None,
+    announce: Callable[[object], None] | None = None,
 ) -> BotOutcome:
     calls = 0
 
@@ -101,6 +106,7 @@ def run(
         recorder=recorder,
         timeouts=timeouts,
         stop_requested=stop_requested,
+        announce=announce,  # type: ignore[arg-type]
     )
 
 
@@ -451,3 +457,80 @@ def test_leave_click_is_bounded_for_fast_stop(monkeypatch: pytest.MonkeyPatch) -
     _leave_zoom(page)
 
     assert calls == [LEAVE_CLICK_TIMEOUT_MS]
+
+
+def test_mute_click_is_bounded_for_fast_stop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Z3 live run (2026-10-09): the post-admission re-mute targets the same
+    below-the-fold footer; an unbounded trusted click retried ~30 s and
+    overran docker's stop grace (exit 137, unfinalized WAV). The click must
+    carry the same bounded budget as the leave click.
+    """
+    calls: list[int | None] = []
+
+    def fake_click(target: object, *, timeout_ms: int | None = None) -> None:
+        calls.append(timeout_ms)
+
+    monkeypatch.setattr("bot.listeners_zoom.click_like_human", fake_click)
+    page = FakePage.from_fixture(FIXTURES / "zoom_in_call.html")
+
+    _mute_media(
+        page,
+        selectors_zoom.microphone_toggle,
+        "microphone",
+        already_off_markers=("unmute",),
+    )
+
+    assert calls == [MUTE_CLICK_TIMEOUT_MS]
+
+
+# --- consent announcement --------------------------------------------------
+
+
+def test_announce_fires_once_after_recording_starts() -> None:
+    recorder = FakeRecorder()
+    announcements: list[object] = []
+    in_call = "zoom_in_call"
+    outcome = run(
+        scripted(in_call, in_call, in_call),
+        recorder,
+        LONG,
+        stop_after=2,
+        announce=announcements.append,
+    )
+
+    assert outcome.exit_code == EXIT_OK
+    assert len(announcements) == 1
+
+
+def test_announce_never_fires_without_recording() -> None:
+    recorder = FakeRecorder()
+    announcements: list[object] = []
+    outcome = run(
+        scripted("zoom_waiting_room"),
+        recorder,
+        INSTANT,
+        announce=announcements.append,
+    )
+
+    assert outcome.exit_code == EXIT_NEVER_ADMITTED
+    assert announcements == []
+    assert recorder.started is False
+
+
+def test_announce_failure_does_not_break_loop() -> None:
+    recorder = FakeRecorder()
+
+    def bad_announce(_page: object) -> None:
+        raise RuntimeError("chat exploded")
+
+    in_call = "zoom_in_call"
+    outcome = run(
+        scripted(in_call, "zoom_ended"),
+        recorder,
+        LONG,
+        announce=bad_announce,
+    )
+
+    assert outcome.exit_code == EXIT_OK
+    assert outcome.end_reason == "call_ended"
+    assert recorder.stopped is True
