@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Zoom Meeting - chat panel without a send control</title>
+</head>
+<body>
+<!-- Older/variant builds may rely on Enter instead of a send button; the
+     shared flow presses Enter when no send control is found. -->
+<main>
+<footer role="presentation">
+<button type="button" role="button" aria-label="mute my microphone">Mute</button>
+<button type="button" role="button" aria-label="open the chat panel">Chat</button>
+<button type="button" role="button" aria-label="Leave">Leave</button>
+</footer>
+<aside aria-label="Chat">
+<div role="application" aria-label="Chat Message List"></div>
+<div contenteditable="true"></div>
+</aside>
+</main>
+</body>
+</html>

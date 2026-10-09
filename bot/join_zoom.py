@@ -255,6 +255,11 @@ def _still_prejoin(page: Page) -> bool:
     return selectors_zoom.join_button(page, timeout_ms=0) is not None
 
 
+def _announce_consent(page: Page) -> None:
+    """Listener hook: post the consent message once recording has started."""
+    consent.post_chat_announcement(page, selector_set=selectors_zoom)
+
+
 def _join_and_record_zoom(
     page: Page, meeting_url: str, bot_name: str, call_id: str, stop: _Stop
 ) -> tuple[BotOutcome, Recorder]:
@@ -295,6 +300,7 @@ def _join_and_record_zoom(
             recorder=recorder,
             timeouts=_timeouts_from_env(),
             stop_requested=lambda: stop.requested,
+            announce=_announce_consent,
         )
         return loop_outcome, recorder
     except Exception:

@@ -216,7 +216,11 @@ recording is happening — without being told beforehand. The policy lives in
   finder timeout (covers the post-admit UI race). A missing or broken chat
   UI logs a warning, saves a debug screenshot, and the recording continues —
   **chat never stops recording**; the visible name remains the signal. Host
-  chat restrictions are handled the same way (warn, continue).
+  chat restrictions are handled the same way (warn, continue). On Zoom the
+  same message goes through the web-client chat panel (selectors in
+  `bot/selectors_zoom.py`; the shared policy carries verified DOM-click and
+  fill fallbacks for that client) — identical semantics, including host
+  chat restrictions warning and continuing.
 - **`BOT_NAME` is deprecated.** Any value other than the exact `Oree
   Notetaker` logs a deprecation warning naming both values, then the
   hard-coded name is used. Person-like names ("Alex") are never honored —

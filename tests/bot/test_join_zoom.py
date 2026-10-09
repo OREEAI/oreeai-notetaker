@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 from bot.listeners import EXIT_BOT_ERROR, EXIT_OK, BotOutcome
 
-from bot import join_zoom
+from bot import join_zoom, selectors_zoom
 from tests.bot.fakes import FakePage
 
 FIXTURES = Path(__file__).parent / "fixtures" / "zoom"
@@ -156,6 +156,24 @@ def test_spike_loop_is_absorbed_by_listeners_zoom() -> None:
     """Z2 replaced the Z1 spike loop with the full lifecycle module."""
     assert not hasattr(join_zoom, "run_zoom_spike_loop")
     assert callable(join_zoom.run_call_loop)
+
+
+def test_announce_consent_uses_shared_policy_with_zoom_selectors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Z3 wiring: the hook stays on the shared consent policy (no fork),
+    with Zoom's selector set for the chat controls."""
+    calls: list[object] = []
+
+    def fake_post(target: object, *, selector_set: object = None, **kwargs: object) -> bool:
+        calls.append(selector_set)
+        return True
+
+    monkeypatch.setattr(join_zoom.consent, "post_chat_announcement", fake_post)
+
+    join_zoom._announce_consent(FakePage.from_fixture(FIXTURES / "zoom_in_call.html"))
+
+    assert calls == [selectors_zoom]
 
 
 # --- env parsing and the shared result line --------------------------------

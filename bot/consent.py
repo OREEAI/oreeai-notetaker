@@ -14,6 +14,11 @@ recording is happening:
 - Chat announcement: once recording starts, the exact consent message is
   posted to the in-meeting chat. Best-effort with distinct log lines for
   success / failure / element-not-found; recording never stops for chat.
+  Clicks are trusted-first with a DOM-click fallback, and typing is
+  verified with a ``fill`` commit when an editor ignores key events
+  (Zoom's web client needs both — live 2026-10-08; Meet's controls take
+  the trusted click and its composer takes typing, so its path is
+  unchanged).
 
 This module owns the consent *policy*; the click-through lifecycle that
 calls into it stays in :mod:`bot.listeners` / :mod:`bot.join_meet`.
@@ -54,6 +59,18 @@ CHAT_FIND_TIMEOUT_S = 10.0
 # Chat typing runs faster than the green-room name (the message should be
 # readable within ~10 s of recording starting). Green-room pacing unchanged.
 CHAT_TYPE_DELAY_MS = (15.0, 45.0)
+
+# Bounded actionability budget for the trusted chat clicks. Zoom's web
+# client can render its footer below the fold (live 2026-10-08: the chat
+# control's center sits at y=1083 in a 1080-tall viewport), where a
+# Playwright click can never land and would otherwise stall the
+# best-effort announcement for the default 30 s before failing.
+CHAT_CLICK_TIMEOUT_MS = 5000
+
+# Wait after a trusted send click before checking whether it took effect.
+# Zoom's web client accepts the click actionably but can silently ignore
+# it (live 2026-10-08), leaving the message in the composer.
+CHAT_SEND_CONFIRM_WAIT_MS = 1000
 
 _PRODUCTION = "production"
 
@@ -167,6 +184,44 @@ def _chat_not_found(what: str, page: Page, find_timeout_s: float) -> None:
     )
 
 
+def _box_has_text(box: Locator) -> bool:
+    """Whether the chat composer currently holds text. Never raises.
+
+    ``input_value`` covers input/textarea composers; contenteditable
+    composers (Zoom's live build) have no value API, so their rendered
+    text is read instead.
+    """
+    try:
+        return bool(box.input_value())
+    except Exception:
+        pass
+    try:
+        return bool((box.inner_text() or "").strip())
+    except Exception:
+        return False
+
+
+def _click_with_dom_fallback(page: Page, target: Locator) -> bool:
+    """Click a chat control; fall back to a DOM click when the trusted one
+    cannot land. Returns whether the trusted click was accepted.
+
+    Zoom's web client can render controls below the fold (the trusted click
+    then times out with "element is outside of the viewport") and ignores
+    some trusted clicks outright, while ``el.click()`` reaches the Vue
+    handlers — the same lesson as the Zoom join flow (Z1), re-confirmed on
+    the in-call chat panel live 2026-10-08. The mouse move stays outside
+    the fallback so real interaction errors still reach the caller's
+    handler; only a failed click is retried.
+    """
+    move_to(page, target)
+    try:
+        click_like_human(target, timeout_ms=CHAT_CLICK_TIMEOUT_MS)
+        return True
+    except Exception:
+        target.evaluate("el => el.click()")
+        return False
+
+
 def post_chat_announcement(
     page: Page,
     *,
@@ -186,18 +241,40 @@ def post_chat_announcement(
         _chat_not_found("open-chat control", page, find_timeout_s)
         return False
     try:
-        move_to(page, toggle)
-        click_like_human(toggle)
+        trusted_clicked = _click_with_dom_fallback(page, toggle)
         pause_between_actions(page)
         box = selector_set.chat_message_box(page, timeout_ms=timeout_ms)
+        if (
+            box is None
+            and trusted_clicked
+            and selector_set.chat_open_button(page, timeout_ms=0) is not None
+        ):
+            # The trusted click was actionably accepted but silently ignored
+            # by the client (Zoom live 2026-10-08: the panel never opened),
+            # while a panel that did open renames its open control. Retry
+            # through the DOM path only while the open control is still
+            # present, so a restricted panel (no composer) is never toggled
+            # shut; on platforms whose click already worked the composer is
+            # found above and this branch is unreachable.
+            toggle.evaluate("el => el.click()")
+            box = selector_set.chat_message_box(page, timeout_ms=timeout_ms)
         if box is None:
             _chat_not_found("message box", page, find_timeout_s)
             return False
         type_text(page, box, message, char_delay_ms=CHAT_TYPE_DELAY_MS)
+        if not _box_has_text(box):
+            # Editors that ignore Playwright key events (Zoom's live build)
+            # still commit fill() through the model — same lesson as the
+            # Zoom pre-join name field (Z1). Verified-only on Meet.
+            box.fill(message)
         send = selector_set.chat_send_button(page, timeout_ms=0)
         if send is not None:
-            move_to(page, send)
-            click_like_human(send)
+            _click_with_dom_fallback(page, send)
+            page.wait_for_timeout(CHAT_SEND_CONFIRM_WAIT_MS)
+            if _box_has_text(box):
+                # The trusted click was silently ignored; the composer
+                # still holds the message. Post it through the DOM path.
+                send.evaluate("el => el.click()")
         else:
             box.press("Enter")
     except Exception as exc:

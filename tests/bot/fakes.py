@@ -132,6 +132,10 @@ class FakeLocator:
             self._page.pressed.append(key)
 
     def fill(self, value: str) -> None:
+        if self._elements:
+            # A real browser reflects fill() into the element's text/value;
+            # the consent composer check reads it back.
+            self._elements[0].text_parts = [value]
         if self._page is not None:
             self._page.filled.append(value)
 
@@ -158,12 +162,22 @@ class _FakeKeyboard:
 
 
 _SIMPLE_ATTRIBUTE_SELECTOR = re.compile(
-    r"(?P<tag>[A-Za-z][\w-]*)\[(?P<attr>[\w-]+)\*=\"(?P<value>[^\"]+)\"\s*i\]"
+    r"(?P<tag>[A-Za-z][\w-]*)?"
+    r"\[(?P<attr>[\w-]+)(?P<op>\*?)=\"(?P<value>[^\"]+)\"(?P<icase>\s+i)?\]"
 )
 
 
-def _matches_attribute(item: _Element, tag: str, attr: str, value: str) -> bool:
-    return item.tag == tag and value in item.attrs.get(attr, "").casefold()
+def _matches_attribute(
+    item: _Element, tag: str | None, attr: str, value: str, op: str, icase: bool
+) -> bool:
+    if tag is not None and item.tag != tag:
+        return False
+    actual = item.attrs.get(attr, "")
+    if op == "*=":
+        return value.casefold() in actual.casefold()
+    if icase:
+        return value.casefold() == actual.casefold()
+    return actual == value
 
 
 class FakePage:
@@ -232,14 +246,17 @@ class FakePage:
         match = _SIMPLE_ATTRIBUTE_SELECTOR.fullmatch(selector.strip())
         if match is None:
             return FakeLocator((), self)
-        wanted_tag = match.group("tag").lower()
+        raw_tag = match.group("tag")
+        wanted_tag = raw_tag.lower() if raw_tag else None
         wanted_attr = match.group("attr").lower()
-        wanted_value = match.group("value").casefold()
+        wanted_value = match.group("value")
+        wanted_op = match.group("op")
+        icase = bool(match.group("icase"))
         return FakeLocator(
             [
                 item
                 for item in self._elements
-                if _matches_attribute(item, wanted_tag, wanted_attr, wanted_value)
+                if _matches_attribute(item, wanted_tag, wanted_attr, wanted_value, wanted_op, icase)
             ],
             self,
         )
